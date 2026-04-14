@@ -319,6 +319,72 @@ HTML_PAGE = r"""<!DOCTYPE html>
   .ai-pill.buy { background: rgba(61,255,160,0.12); color: var(--green); }
   .ai-pill.sell { background: rgba(255,87,87,0.12); color: var(--red); }
   .ai-pill.wait { background: rgba(255,184,71,0.12); color: var(--amber); }
+  .focus-toolbar {
+    display:flex;
+    gap:8px;
+    align-items:center;
+    flex-wrap:wrap;
+    margin-bottom:10px;
+  }
+  .focus-toolbar select {
+    background: var(--bg2);
+    color: var(--text);
+    border:1px solid var(--border2);
+    border-radius:8px;
+    padding:8px 10px;
+    font-family: var(--mono);
+    font-size:12px;
+  }
+  .market-deck {
+    display:grid;
+    grid-template-columns: 1.2fr 1fr;
+    gap:10px;
+    margin-top:12px;
+  }
+  .market-box {
+    border:1px solid var(--border);
+    border-radius:10px;
+    padding:10px;
+    background: rgba(255,255,255,0.02);
+  }
+  .sparkline-box {
+    height:140px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    border:1px solid var(--border);
+    border-radius:10px;
+    background: linear-gradient(180deg, rgba(124,106,247,0.08), rgba(61,217,255,0.02));
+  }
+  .metric-row {
+    margin-bottom:8px;
+  }
+  .metric-head {
+    display:flex;
+    justify-content:space-between;
+    font-size:11px;
+    color: var(--muted);
+    margin-bottom:4px;
+    font-family: var(--mono);
+  }
+  .metric-track {
+    height:8px;
+    background: var(--bg);
+    border-radius:999px;
+    overflow:hidden;
+  }
+  .metric-fill {
+    height:100%;
+    border-radius:999px;
+    background: linear-gradient(90deg, var(--accent), var(--teal));
+  }
+  .market-note {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    line-height: 1.6;
+    margin-top: 8px;
+  }
 
   /* Responsive */
   @media (max-width: 768px) {
@@ -468,12 +534,32 @@ HTML_PAGE = r"""<!DOCTYPE html>
 
       <div class="live-ai-box">
         <div class="panel-title" style="margin-bottom:8px;">Cockpit IA en direct</div>
+        <div class="focus-toolbar">
+          <span class="refresh-info">Paire focus :</span>
+          <select id="focus-pair-select" onchange="onFocusPairChanged()"></select>
+          <span class="refresh-info">Vue uniquement sur la paire analysée.</span>
+        </div>
         <div id="ai-live-decision" class="refresh-info" style="white-space:normal;line-height:1.6;">En attente d'une analyse IA...</div>
         <div class="mini-grid">
           <div class="mini-kpi"><div class="label">Instrument</div><div class="value" id="ai-live-symbol">—</div></div>
           <div class="mini-kpi"><div class="label">Décision</div><div class="value" id="ai-live-action">WAIT</div></div>
           <div class="mini-kpi"><div class="label">Confiance</div><div class="value" id="ai-live-confidence">0%</div></div>
           <div class="mini-kpi"><div class="label">Auto</div><div class="value" id="ai-live-auto">ON · 45s</div></div>
+        </div>
+        <div class="market-deck">
+          <div class="market-box">
+            <div class="panel-title" style="margin-bottom:8px;">Marché live</div>
+            <div id="pair-sparkline" class="sparkline-box"><span class="refresh-info">Aucune paire analysée</span></div>
+            <div id="pair-market-note" class="market-note">Le graphique montrera uniquement la paire sélectionnée.</div>
+          </div>
+          <div class="market-box">
+            <div class="panel-title" style="margin-bottom:8px;">Forces de l'analyse</div>
+            <div class="metric-row"><div class="metric-head"><span>RSI</span><span id="metric-rsi-value">—</span></div><div class="metric-track"><div id="metric-rsi" class="metric-fill" style="width:0%"></div></div></div>
+            <div class="metric-row"><div class="metric-head"><span>Momentum</span><span id="metric-momentum-value">—</span></div><div class="metric-track"><div id="metric-momentum" class="metric-fill" style="width:0%"></div></div></div>
+            <div class="metric-row"><div class="metric-head"><span>Tendance</span><span id="metric-trend-value">—</span></div><div class="metric-track"><div id="metric-trend" class="metric-fill" style="width:0%"></div></div></div>
+            <div class="metric-row"><div class="metric-head"><span>Risk/Reward</span><span id="metric-rr-value">—</span></div><div class="metric-track"><div id="metric-rr" class="metric-fill" style="width:0%"></div></div></div>
+            <div id="pair-flow-note" class="market-note">Spread, support, résistance et régime s'affichent ici en direct.</div>
+          </div>
         </div>
         <div id="ai-history-chart" class="ai-bars"></div>
       </div>
@@ -597,6 +683,8 @@ let autoSaveTimer = null;
 let autoAiEnabled = true;
 let aiBusy = false;
 let lastAiPayload = null;
+let latestStatusPayload = null;
+let currentFocusPair = '';
 
 function fmtPnl(val) {
   const v = parseFloat(val) || 0;
@@ -679,6 +767,74 @@ async function saveSettings(silent = false) {
   }
 }
 
+function getFocusedPair() {
+  const sel = document.getElementById('focus-pair-select');
+  return (sel?.value || currentFocusPair || '').trim();
+}
+
+function syncFocusPairs(symbols) {
+  const sel = document.getElementById('focus-pair-select');
+  if (!sel) return;
+  const list = (symbols || []).filter(Boolean);
+  const wanted = currentFocusPair || list[0] || '';
+  sel.innerHTML = list.map(s => '<option value="' + s + '">' + s + '</option>').join('');
+  sel.value = list.includes(wanted) ? wanted : (list[0] || '');
+  currentFocusPair = sel.value || '';
+}
+
+function renderPairSnapshot(result) {
+  if (!result) return;
+  const snap = result.market_snapshot || {};
+  const signal = result.signal || {};
+  const details = signal.details || {};
+  const action = String(result.decision?.decision || 'WAIT').toUpperCase();
+  const rr = action === 'SELL' ? (snap.rr_sell ?? details.rr_sell ?? 0) : (snap.rr_buy ?? details.rr_buy ?? 0);
+  const closes = Array.isArray(snap.closes) ? snap.closes : [];
+  const box = document.getElementById('pair-sparkline');
+
+  if (closes.length >= 2) {
+    const min = Math.min(...closes);
+    const max = Math.max(...closes);
+    const span = (max - min) || 1;
+    const points = closes.map((v, i) => {
+      const x = (i / Math.max(1, closes.length - 1)) * 280;
+      const y = 100 - (((v - min) / span) * 80 + 10);
+      return x.toFixed(1) + ',' + y.toFixed(1);
+    }).join(' ');
+    const color = action === 'BUY' ? '#3dffa0' : action === 'SELL' ? '#ff5757' : '#ffb847';
+    box.innerHTML = '<svg viewBox="0 0 280 100" width="100%" height="120" preserveAspectRatio="none">' +
+      '<polyline fill="none" stroke="' + color + '" stroke-width="3" points="' + points + '" />' +
+      '</svg>';
+  } else {
+    box.innerHTML = '<span class="refresh-info">Données marché insuffisantes</span>';
+  }
+
+  const rsi = Math.max(0, Math.min(100, parseFloat(snap.rsi || details.rsi || 0) || 0));
+  const momentum = Math.max(0, Math.min(100, 50 + (parseFloat(snap.momentum_5 || 0) || 0) * 300));
+  const trend = Math.max(0, Math.min(100, (parseFloat(snap.trend_strength || 0) || 0) * 240));
+  const rrPct = Math.max(0, Math.min(100, (parseFloat(rr || 0) || 0) * 35));
+
+  document.getElementById('metric-rsi').style.width = rsi + '%';
+  document.getElementById('metric-rsi-value').textContent = rsi.toFixed(1);
+  document.getElementById('metric-momentum').style.width = momentum + '%';
+  document.getElementById('metric-momentum-value').textContent = (parseFloat(snap.momentum_5 || 0) || 0).toFixed(2) + '%';
+  document.getElementById('metric-trend').style.width = trend + '%';
+  document.getElementById('metric-trend-value').textContent = (parseFloat(snap.trend_strength || 0) || 0).toFixed(3);
+  document.getElementById('metric-rr').style.width = rrPct + '%';
+  document.getElementById('metric-rr-value').textContent = (parseFloat(rr || 0) || 0).toFixed(2);
+
+  document.getElementById('pair-market-note').textContent =
+    'Prix ' + (parseFloat(snap.price || 0) || 0).toFixed(5) +
+    ' · spread ' + (parseFloat(snap.spread || 0) || 0).toFixed(1) + ' pips · support ' +
+    (parseFloat(snap.support || 0) || 0).toFixed(5) + ' · résistance ' +
+    (parseFloat(snap.resistance || 0) || 0).toFixed(5);
+
+  document.getElementById('pair-flow-note').textContent =
+    'Régime ' + (snap.regime || details.market_regime || '—') +
+    ' · bias ' + ((parseFloat(snap.signal_bias || 0) || 0).toFixed(2)) +
+    ' · ATR ' + ((parseFloat(snap.atr_pips || signal.atr_pips || 0) || 0).toFixed(1)) + ' pips';
+}
+
 function renderAiDecision(result) {
   if (!result) return;
   const d = result.decision || {};
@@ -688,6 +844,7 @@ function renderAiDecision(result) {
   const klass = action === 'BUY' ? 'buy' : action === 'SELL' ? 'sell' : 'wait';
   const confidence = Math.round((parseFloat(d.confidence || 0) || 0) * 100);
 
+  currentFocusPair = result.instrument || currentFocusPair;
   document.getElementById('ai-live-symbol').textContent = result.instrument || '—';
   document.getElementById('ai-live-action').innerHTML = '<span class="ai-pill ' + klass + '">' + action + '</span>';
   document.getElementById('ai-live-confidence').textContent = confidence + '%';
@@ -697,25 +854,36 @@ function renderAiDecision(result) {
     ' Score ' + (signal.score || 0) + '/5 · Régime ' + (details.market_regime || '—') +
     ' · RR ' + ((action === 'SELL' ? details.rr_sell : details.rr_buy) ?? 0) +
     '<br>' + (d.reasoning || 'Analyse en attente.');
+  renderPairSnapshot(result);
 }
 
 function renderAiChart(data) {
-  const rows = (data.ml_history || []).slice(-20);
+  const focus = getFocusedPair();
+  const rowsAll = (data.ml_history || []).slice(-40);
+  const rows = focus ? rowsAll.filter(row => String(row.instrument || '').toUpperCase() === focus.toUpperCase()).slice(-20) : rowsAll.slice(-20);
   const el = document.getElementById('ai-history-chart');
   if (!rows.length) {
-    el.innerHTML = '<div class="refresh-info">Pas encore d\'historique IA.</div>';
+    el.innerHTML = '<div class="refresh-info">Pas encore d\'historique IA sur cette paire.</div>';
     return;
   }
-  el.innerHTML = rows.map((row, idx) => {
+  el.innerHTML = rows.map((row) => {
     const decision = String(row.decision || 'WAIT').toUpperCase();
     const conf = Math.max(6, Math.round((parseFloat(row.confidence || 0) || 0) * 100));
     const color = decision === 'BUY' ? 'var(--green)' : decision === 'SELL' ? 'var(--red)' : 'var(--amber)';
-    const label = (row.instrument || '—').slice(0, 3);
+    const label = String(row.timestamp || '').slice(11, 16) || (row.instrument || '—').slice(0, 3);
     return '<div class="ai-bar-wrap" title="' + (row.instrument || '—') + ' | ' + decision + ' | conf ' + conf + '%">' +
       '<div class="ai-bar" style="height:' + conf + '%;background:' + color + '"></div>' +
       '<div class="ai-bar-label">' + label + '</div>' +
     '</div>';
   }).join('');
+}
+
+function onFocusPairChanged() {
+  currentFocusPair = getFocusedPair();
+  if (latestStatusPayload) {
+    renderAiChart(latestStatusPayload);
+  }
+  testAI();
 }
 
 function toggleAutoAI() {
@@ -729,9 +897,10 @@ async function testAI() {
   if (aiBusy) return;
   aiBusy = true;
   document.getElementById('ai-test-result').textContent = 'Test IA en cours...';
+  const focused = getFocusedPair();
   const typed = (document.getElementById('setting-preferred-symbols').value || '').split(',')[0]?.trim();
   const visible = (document.getElementById('active-symbols').textContent || '').split(',')[0]?.trim();
-  const symbol = typed || visible || 'XAUUSDm';
+  const symbol = focused || typed || visible || 'XAUUSDm';
   try {
     const res = await fetch('/api/test-ai', {
       method: 'POST',
@@ -760,6 +929,7 @@ async function fetchStatus() {
   try {
     const res = await fetch('/api/status');
     const data = await res.json();
+    latestStatusPayload = data;
 
     // Market status
     const badge = document.getElementById('status-badge');
@@ -776,6 +946,7 @@ async function fetchStatus() {
     document.getElementById('symbol-mode').textContent = data.settings?.symbol_source_mode || '—';
     document.getElementById('ai-provider').textContent = data.ai_provider || '—';
     document.getElementById('active-symbols').textContent = (data.active_symbols || []).join(', ') || '—';
+    syncFocusPairs(data.active_symbols || []);
     populateSettings(data);
     renderAiChart(data);
     if (lastAiPayload) {

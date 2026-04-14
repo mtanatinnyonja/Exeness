@@ -278,6 +278,10 @@ class TradeOrchestrator:
             signal["pattern"] = signal.get("pattern") or "forced_test_mode"
 
         spread = self.broker.get_spread_pips(target)
+        details = signal.get("details", {}) or {}
+        closes = [float(c.get("close", 0) or 0) for c in candles[-30:]]
+        highs = [float(c.get("high", 0) or 0) for c in candles[-30:]]
+        lows = [float(c.get("low", 0) or 0) for c in candles[-30:]]
         context = f"Mode test dashboard. Spread actuel: {spread:.1f} pips."
         decision = self.intelligence.analyze_signal(target, signal, account, context, fast_mode=True)
         self.store.record_signal_sample(target, signal, spread, decision or {"decision": "WAIT", "confidence": 0})
@@ -287,6 +291,22 @@ class TradeOrchestrator:
             "decision": decision,
             "provider": self.intelligence.provider,
             "spread": spread,
+            "market_snapshot": {
+                "price": float(details.get("price", closes[-1] if closes else 0) or 0),
+                "support": float(details.get("support", min(lows) if lows else 0) or 0),
+                "resistance": float(details.get("resistance", max(highs) if highs else 0) or 0),
+                "rsi": float(details.get("rsi", 50) or 50),
+                "regime": str(details.get("market_regime", "unknown")),
+                "momentum_5": float(details.get("momentum_5", 0) or 0),
+                "momentum_20": float(details.get("momentum_20", 0) or 0),
+                "trend_strength": float(details.get("trend_strength", 0) or 0),
+                "rr_buy": float(details.get("rr_buy", 0) or 0),
+                "rr_sell": float(details.get("rr_sell", 0) or 0),
+                "signal_bias": float(details.get("signal_bias", 0) or 0),
+                "atr_pips": float(signal.get("atr_pips", 0) or 0),
+                "spread": float(spread or 0),
+                "closes": [round(v, 5) for v in closes],
+            },
         }
 
     def get_status(self) -> Dict:
