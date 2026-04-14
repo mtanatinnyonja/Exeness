@@ -776,10 +776,11 @@ function syncFocusPairs(symbols) {
   const sel = document.getElementById('focus-pair-select');
   if (!sel) return;
   const list = (symbols || []).filter(Boolean);
-  const wanted = currentFocusPair || list[0] || '';
+  const typed = ((document.getElementById('setting-preferred-symbols')?.value || '').split(',')[0] || '').trim();
+  const wanted = currentFocusPair || typed || list[0] || '';
   sel.innerHTML = list.map(s => '<option value="' + s + '">' + s + '</option>').join('');
-  sel.value = list.includes(wanted) ? wanted : (list[0] || '');
-  currentFocusPair = sel.value || '';
+  sel.value = list.includes(wanted) ? wanted : (typed && !list.includes(typed) ? (list[0] || '') : (list[0] || ''));
+  currentFocusPair = typed || sel.value || '';
 }
 
 function renderPairSnapshot(result) {

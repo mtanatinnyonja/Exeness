@@ -253,6 +253,7 @@ class MT5Broker:
         for pos in self.mt5.positions_get() or []:
             direction = "BUY" if pos.type == self.mt5.POSITION_TYPE_BUY else "SELL"
             positions.append({
+                "ticket": getattr(pos, "ticket", None),
                 "instrument": pos.symbol,
                 "direction": direction,
                 "units": getattr(pos, "volume", 0.0),
@@ -356,7 +357,40 @@ class MT5Broker:
         }
 
     def close_position(self, instrument: str) -> Optional[float]:
-        return None
+        self._ensure_ready()
+        symbol = self._resolve_symbol(instrument)
+        positions = self.mt5.positions_get(symbol=symbol) or []
+        if not positions:
+            return 0.0
+
+        total_profit = 0.0
+        for pos in positions:
+            total_profit += float(getattr(pos, "profit", 0.0))
+            if not self.safe_to_trade:
+                continue
+
+            close_type = self.mt5.ORDER_TYPE_SELL if pos.type == self.mt5.POSITION_TYPE_BUY else self.mt5.ORDER_TYPE_BUY
+            tick = self.mt5.symbol_info_tick(symbol)
+            price = float(tick.bid if close_type == self.mt5.ORDER_TYPE_SELL else tick.ask)
+            request = {
+                "action": self.mt5.TRADE_ACTION_DEAL,
+                "symbol": symbol,
+                "volume": float(getattr(pos, "volume", 0.0)),
+                "type": close_type,
+                "position": int(getattr(pos, "ticket", 0)),
+                "price": price,
+                "deviation": MT5_DEVIATION,
+                "magic": MT5_MAGIC_NUMBER,
+                "comment": "LOCAL-AUTO-CLOSE",
+                "type_time": self.mt5.ORDER_TIME_GTC,
+                "type_filling": self.mt5.ORDER_FILLING_IOC,
+            }
+            result = self.mt5.order_send(request)
+            if result is None or result.retcode not in {self.mt5.TRADE_RETCODE_DONE, self.mt5.TRADE_RETCODE_DONE_PARTIAL}:
+                err = self.mt5.last_error() if result is None else result.retcode
+                raise RuntimeError(f"close_position échoué: {err}")
+
+        return total_profit
 
 
 DemoBroker = PaperBroker

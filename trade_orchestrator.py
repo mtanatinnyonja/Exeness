@@ -94,9 +94,11 @@ class TradeOrchestrator:
         today_pnl = self.memory.get_daily_pnl()
         if daily_loss_limit < 0 and today_pnl <= daily_loss_limit:
             self.memory.log_session(f"🛑 Perte journalière limite atteinte: ${today_pnl:.2f}")
+            self._close_all_positions(open_positions, "limite de perte journalière")
             return
         if daily_target > 0 and today_pnl >= daily_target:
             self.memory.log_session(f"🎯 Objectif journalier atteint: ${today_pnl:.2f}")
+            self._close_all_positions(open_positions, "objectif journalier atteint")
             return
 
         instruments = self.get_target_instruments()
@@ -185,9 +187,15 @@ class TradeOrchestrator:
             self.store.record_signal_sample(instrument, signal_h1, spread, decision)
 
             decision["risk_multiplier"] = learning["risk_multiplier"]
+            instrument_positions = [p for p in self.broker.get_open_positions() if str(p.get("instrument", "")).upper() == instrument.upper()]
+
             if decision["decision"] in ["BUY", "SELL"]:
+                if self._manage_existing_position(instrument, instrument_positions, decision):
+                    return
                 self._execute_trade(instrument, decision, signal_h1, account)
             else:
+                if instrument_positions:
+                    self.memory.log_session(f"🧭 {instrument}: pas de nouveau trade, position existante surveillée automatiquement")
                 self.memory.log_session(f"⏸️ {instrument}: IA dit WAIT - {decision.get('reasoning', '')[:90]}")
 
         except Exception as e:
@@ -250,6 +258,37 @@ class TradeOrchestrator:
             self.memory.log_session(
                 f"{emoji} Position {pos.get('instrument')} {pos.get('direction')}: P&L non réalisé = ${upnl:.2f}"
             )
+
+    def _close_all_positions(self, positions: List[Dict], reason: str):
+        for pos in positions:
+            try:
+                pnl = self.broker.close_position(pos.get("instrument"))
+                self.memory.log_session(
+                    f"🔒 Fermeture auto {pos.get('instrument')} | raison: {reason} | pnl={float(pnl or 0):.2f}"
+                )
+            except Exception as e:
+                self.memory.log_session(f"❌ Fermeture auto échouée {pos.get('instrument')}: {e}")
+
+    def _manage_existing_position(self, instrument: str, positions: List[Dict], decision: Dict) -> bool:
+        if not positions:
+            return False
+
+        wanted = str(decision.get("decision", "WAIT")).upper()
+        for pos in positions:
+            current_dir = str(pos.get("direction", "")).upper()
+            if current_dir == wanted:
+                self.memory.log_session(f"🟢 {instrument}: position {current_dir} déjà ouverte, pas de doublon")
+                return True
+            if current_dir and wanted in {"BUY", "SELL"} and current_dir != wanted:
+                try:
+                    pnl = self.broker.close_position(instrument)
+                    self.memory.log_session(
+                        f"🔄 {instrument}: fermeture auto {current_dir} puis inversion vers {wanted} | pnl={float(pnl or 0):.2f}"
+                    )
+                except Exception as e:
+                    self.memory.log_session(f"❌ {instrument}: impossible de fermer avant inversion: {e}")
+                    return True
+        return False
 
     def preview_ai_decision(self, instrument: str = None) -> Dict:
         symbols = self.get_target_instruments()
