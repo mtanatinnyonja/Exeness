@@ -285,10 +285,13 @@ HTML_PAGE = r"""<!DOCTYPE html>
   .ai-bars {
     display:flex;
     align-items:flex-end;
-    gap:4px;
-    height:120px;
+    gap:6px;
+    height:150px;
     margin-top:12px;
-    padding-top:8px;
+    padding:10px 8px 0;
+    border:1px solid var(--border);
+    border-radius:12px;
+    background: linear-gradient(180deg, rgba(124,106,247,0.08), rgba(61,217,255,0.02));
   }
   .ai-bar-wrap {
     flex:1;
@@ -296,12 +299,15 @@ HTML_PAGE = r"""<!DOCTYPE html>
     flex-direction:column;
     align-items:center;
     gap:4px;
+    min-width: 20px;
   }
   .ai-bar {
     width:100%;
-    border-radius: 6px 6px 0 0;
-    min-height: 6px;
-    opacity: 0.95;
+    border-radius: 8px 8px 0 0;
+    min-height: 18px;
+    opacity: 0.98;
+    box-shadow: 0 0 10px rgba(124,106,247,0.18);
+    border: 1px solid rgba(255,255,255,0.08);
   }
   .ai-bar-label {
     font-size:9px;
@@ -815,14 +821,19 @@ function renderPairSnapshot(result) {
     const min = Math.min(...closes);
     const max = Math.max(...closes);
     const span = (max - min) || 1;
-    const points = closes.map((v, i) => {
+    const coords = closes.map((v, i) => {
       const x = (i / Math.max(1, closes.length - 1)) * 280;
       const y = 100 - (((v - min) / span) * 80 + 10);
-      return x.toFixed(1) + ',' + y.toFixed(1);
-    }).join(' ');
+      return { x, y };
+    });
+    const points = coords.map(p => p.x.toFixed(1) + ',' + p.y.toFixed(1)).join(' ');
+    const area = '0,100 ' + points + ' 280,100';
+    const last = coords[coords.length - 1] || { x: 280, y: 50 };
     const color = action === 'BUY' ? '#3dffa0' : action === 'SELL' ? '#ff5757' : '#ffb847';
     box.innerHTML = '<svg viewBox="0 0 280 100" width="100%" height="120" preserveAspectRatio="none">' +
-      '<polyline fill="none" stroke="' + color + '" stroke-width="3" points="' + points + '" />' +
+      '<polygon fill="' + color + '22" points="' + area + '" />' +
+      '<polyline fill="none" stroke="' + color + '" stroke-width="3.5" points="' + points + '" />' +
+      '<circle cx="' + last.x.toFixed(1) + '" cy="' + last.y.toFixed(1) + '" r="4" fill="' + color + '" />' +
       '</svg>';
   } else {
     box.innerHTML = '<span class="refresh-info">Données marché insuffisantes</span>';
@@ -891,11 +902,13 @@ function renderAiChart(data) {
   }
   el.innerHTML = rows.map((row) => {
     const decision = String(row.decision || 'WAIT').toUpperCase();
-    const conf = Math.max(6, Math.round((parseFloat(row.confidence || 0) || 0) * 100));
+    const confPct = Math.round((parseFloat(row.confidence || 0) || 0) * 100);
+    const scorePct = Math.round(((parseFloat(row.score || 0) || 0) / 5) * 100);
+    const strength = Math.max(18, confPct, scorePct);
     const color = decision === 'BUY' ? 'var(--green)' : decision === 'SELL' ? 'var(--red)' : 'var(--amber)';
     const label = String(row.timestamp || '').slice(11, 16) || (row.instrument || '—').slice(0, 3);
-    return '<div class="ai-bar-wrap" title="' + (row.instrument || '—') + ' | ' + decision + ' | conf ' + conf + '%">' +
-      '<div class="ai-bar" style="height:' + conf + '%;background:' + color + '"></div>' +
+    return '<div class="ai-bar-wrap" title="' + (row.instrument || '—') + ' | ' + decision + ' | score ' + (row.score || 0) + '/5 | conf ' + confPct + '%">' +
+      '<div class="ai-bar" style="height:' + strength + '%;background:' + color + '"></div>' +
       '<div class="ai-bar-label">' + label + '</div>' +
     '</div>';
   }).join('');
