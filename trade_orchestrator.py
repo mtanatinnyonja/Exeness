@@ -361,10 +361,23 @@ class TradeOrchestrator:
         ml_stats = self.store.get_ml_stats()
         ml_history = self.store.get_recent_ml_samples(28)
         llm_calls = self.memory.get_llm_calls_today()
+        active_symbols = self.get_target_instruments()
+        focus_symbol = active_symbols[0] if active_symbols else ""
+        raw_logs = self.memory.memory.get("session_log", [])[-80:]
+        keep_markers = [
+            "Robot démarré", "MT5 détecté", "Cycle démarré", "Cycle terminé",
+            "Marché fermé", "Balance:", "Objectif journalier", "Perte journalière", "Max positions"
+        ]
+        filtered_logs = [
+            line for line in raw_logs
+            if not focus_symbol
+            or focus_symbol.upper() in line.upper()
+            or any(marker in line for marker in keep_markers)
+        ]
         return {
             "timestamp": datetime.utcnow().isoformat(),
             "market_open": self.is_market_open(),
-            "active_symbols": self.get_target_instruments(),
+            "active_symbols": active_symbols,
             "account": account,
             "open_positions": positions,
             "daily_pnl": self.memory.get_daily_pnl(),
@@ -374,7 +387,7 @@ class TradeOrchestrator:
             "llm_calls_today": llm_calls,
             "api_calls_today": llm_calls,
             "recent_trades": self.memory.get_recent_trades(5),
-            "session_log": self.memory.memory.get("session_log", [])[-20:],
+            "session_log": filtered_logs[-20:],
             "best_patterns": self.memory.get_best_patterns()[:3],
             "broker": {
                 "name": getattr(self.broker, "name", "unknown"),

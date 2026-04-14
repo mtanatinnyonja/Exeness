@@ -528,7 +528,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
         <button class="btn" onclick="saveSettings()">Sauvegarder</button>
         <button class="btn" onclick="testAI()">Tester IA</button>
         <button class="btn secondary" id="auto-ai-btn" onclick="toggleAutoAI()">Auto IA: ON</button>
-        <span class="refresh-info">Le test IA lance une prévision live BUY / SELL / WAIT sans ouvrir d'ordre réel.</span>
+        <span class="refresh-info">Le bot autonome peut ouvrir des ordres réels sur le compte démo si l'option trading réel est activée. Ce bouton affiche la décision instantanée sur la paire active.</span>
       </div>
       <div id="ai-test-result" class="refresh-info" style="margin-top:10px;white-space:normal;line-height:1.6;">Aucun test IA lancé.</div>
 
@@ -775,21 +775,29 @@ function getFocusedPair() {
 function syncFocusPairs(symbols, preferredList = []) {
   const sel = document.getElementById('focus-pair-select');
   if (!sel) return;
+
   const fromField = ((document.getElementById('setting-preferred-symbols')?.value || '').split(',')[0] || '').trim();
   const fromSettings = Array.isArray(preferredList) && preferredList.length ? String(preferredList[0] || '').trim() : '';
-  const rawTyped = fromField || fromSettings;
-  const typed = rawTyped ? rawTyped.replace(/\s+/g, '') : '';
-  const list = [];
+  const rawPreferred = fromField || fromSettings;
+  const normalizedPreferred = rawPreferred ? rawPreferred.replace(/\s+/g, '').toUpperCase() : '';
+  const visible = (symbols || []).filter(Boolean);
+  const matchedPreferred = visible.find(s => String(s).toUpperCase() === normalizedPreferred) || rawPreferred;
 
-  if (typed) list.push(typed);
-  (symbols || []).filter(Boolean).forEach(s => {
-    if (!list.includes(s)) list.push(s);
+  const unique = new Map();
+  if (matchedPreferred) unique.set(String(matchedPreferred).toUpperCase(), matchedPreferred);
+  visible.forEach(s => {
+    const key = String(s).toUpperCase();
+    if (!unique.has(key)) unique.set(key, s);
   });
 
-  const wanted = currentFocusPair || typed || list[0] || '';
-  sel.innerHTML = list.map(s => '<option value="' + s + '">' + s + '</option>').join('');
-  sel.value = list.includes(wanted) ? wanted : (typed || list[0] || '');
-  currentFocusPair = sel.value || typed || '';
+  const list = Array.from(unique.values());
+  const forceSingle = true;
+  const finalList = forceSingle && list.length ? [list[0]] : list;
+  const wanted = currentFocusPair || matchedPreferred || finalList[0] || '';
+
+  sel.innerHTML = finalList.map(s => '<option value="' + s + '">' + s + '</option>').join('');
+  sel.value = finalList.includes(wanted) ? wanted : (finalList[0] || '');
+  currentFocusPair = sel.value || matchedPreferred || '';
 }
 
 function renderPairSnapshot(result) {
