@@ -57,6 +57,32 @@ class TradeOrchestrator:
     def is_market_open(self) -> bool:
         return bool(self._get_market_status().get("open"))
 
+    def _max_spread_allowed(self, instrument: str) -> float:
+        name = str(instrument).upper()
+        if name.startswith("XAU"):
+            return 45.0
+        if name.startswith(("BTC", "ETH")):
+            return 120.0
+        return 3.0
+
+    def _min_rr_required(self, instrument: str) -> float:
+        return 1.1 if str(instrument).upper().startswith("XAU") else 1.2
+
+    def _should_use_full_llm(self, instrument: str, signal: Dict, spread: float, chosen_rr: float) -> bool:
+        details = signal.get("details", {}) or {}
+        score = int(signal.get("score", 0) or 0)
+        bias = abs(float(details.get("signal_bias", 0) or 0))
+        trend_strength = float(details.get("trend_strength", 0) or 0)
+        regime = str(details.get("market_regime", "unknown"))
+        return (
+            score >= max(MIN_SIGNAL_SCORE + 1, 4)
+            and chosen_rr >= self._min_rr_required(instrument)
+            and spread <= self._max_spread_allowed(instrument) * 0.85
+            and bias >= 1.2
+            and trend_strength >= 0.08
+            and regime != "range"
+        )
+
     def _build_live_snapshot(self, instrument: str) -> Dict:
         candles_live = self.broker.get_candles(instrument, "M1", 60)
         candles_h1 = self.broker.get_candles(instrument, PRIMARY_TIMEFRAME, 120)
@@ -200,6 +226,7 @@ class TradeOrchestrator:
                 self.memory.log_session(f"✅ {instrument}: alignement TF ({score}/6)")
             else:
                 self.memory.log_session(f"📊 {instrument}: score H1={score}/5 | direction={direction}")
+            signal_h1["score"] = score
 
             self.memory.log_session(
                 f"🧮 {instrument}: regime={regime} | trend={trend_strength:.3f} | "
@@ -213,15 +240,17 @@ class TradeOrchestrator:
                 return
 
             spread = self.broker.get_spread_pips(instrument)
-            if spread > 4.0:
-                self.memory.log_session(f"⚠️ {instrument}: spread trop large ({spread:.1f} pips)")
+            max_spread = self._max_spread_allowed(instrument)
+            if spread > max_spread:
+                self.memory.log_session(f"⚠️ {instrument}: spread trop large ({spread:.1f} pips > {max_spread:.1f})")
                 return
 
             rr_buy = float(details.get("rr_buy", 0) or 0)
             rr_sell = float(details.get("rr_sell", 0) or 0)
             chosen_rr = rr_buy if direction == "BUY" else rr_sell if direction == "SELL" else max(rr_buy, rr_sell)
-            if direction in {"BUY", "SELL"} and chosen_rr < 1.2:
-                self.memory.log_session(f"🛡️ {instrument}: trade ignoré, risk/reward trop faible ({chosen_rr:.2f})")
+            min_rr = self._min_rr_required(instrument)
+            if direction in {"BUY", "SELL"} and chosen_rr < min_rr:
+                self.memory.log_session(f"🛡️ {instrument}: trade ignoré, risk/reward trop faible ({chosen_rr:.2f} < {min_rr:.2f})")
                 return
 
             if regime == "range" and score < (MIN_SIGNAL_SCORE + 1):
@@ -239,9 +268,13 @@ class TradeOrchestrator:
                 f"Resistance distance={details.get('distance_to_resistance_pips', 0)} pips. "
                 f"RiskReward buy={rr_buy:.2f}, sell={rr_sell:.2f}."
             )
-            decision = self.intelligence.analyze_signal(instrument, signal_h1, account, market_ctx)
-            if score < MIN_SIGNAL_SCORE or direction is None:
-                self.memory.log_session(f"🧪 {instrument}: signal faible envoyé au LLM pour validation finale")
+            use_full_llm = self._should_use_full_llm(instrument, signal_h1, spread, chosen_rr)
+            if use_full_llm:
+                decision = self.intelligence.analyze_signal(instrument, signal_h1, account, market_ctx)
+                self.memory.log_session(f"🧠 {instrument}: validation complète par le LLM local")
+            else:
+                decision = self.intelligence.analyze_signal(instrument, signal_h1, account, market_ctx, fast_mode=True)
+                self.memory.log_session(f"⚡ {instrument}: décision rapide locale (règles + mémoire)")
             if not decision:
                 return
 

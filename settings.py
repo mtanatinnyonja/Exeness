@@ -33,17 +33,17 @@ DASHBOARD_PORT = int(os.getenv("DASHBOARD_PORT", "8080"))
 AI_PROVIDER = os.getenv("AI_PROVIDER", "ollama").strip().lower()
 LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "llama3.2:3b").strip()
 LOCAL_LLM_ENDPOINT = os.getenv("LOCAL_LLM_ENDPOINT", "http://127.0.0.1:11434/api/generate").strip()
-LOCAL_LLM_TIMEOUT = int(os.getenv("LOCAL_LLM_TIMEOUT", "120"))
+LOCAL_LLM_TIMEOUT = int(os.getenv("LOCAL_LLM_TIMEOUT", "60"))
 MAX_LLM_CALLS_PER_DAY = int(os.getenv("MAX_LLM_CALLS_PER_DAY", "0"))  # 0 = illimité
 DAILY_TOKEN_BUDGET = int(os.getenv("DAILY_TOKEN_BUDGET", "0"))  # 0 = illimité
-LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.05"))
+LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.02"))
 LLM_MIN_CONFIDENCE = float(os.getenv("LLM_MIN_CONFIDENCE", "0.60"))
 LLM_ANALYSIS_MODE = os.getenv("LLM_ANALYSIS_MODE", "precision").strip().lower()
 LLM_ANALYSIS_NOTES = os.getenv(
     "LLM_ANALYSIS_NOTES",
     "Analyse stricte, multi-confirmation, priorité à la précision et attente en cas de doute."
 ).strip()
-LLM_MAX_CONTEXT_BARS = int(os.getenv("LLM_MAX_CONTEXT_BARS", "140"))
+LLM_MAX_CONTEXT_BARS = int(os.getenv("LLM_MAX_CONTEXT_BARS", "60"))
 ONLY_ALLOW_LOCAL_LLM = True
 
 # === CAPITAL & RISK ===
@@ -61,12 +61,12 @@ INSTRUMENTS = [
 ]
 
 # === TIMEFRAMES ===
-PRIMARY_TIMEFRAME = "H1"
-CONFIRM_TIMEFRAME = "M15"
+PRIMARY_TIMEFRAME = "M15"
+CONFIRM_TIMEFRAME = "M5"
 
 # === SIGNAL FILTER ===
 MIN_SIGNAL_SCORE = 3
-SIGNAL_COOLDOWN_MINUTES = 30
+SIGNAL_COOLDOWN_MINUTES = 10
 
 # === INDICATEURS TECHNIQUES ===
 RSI_PERIOD = 14
@@ -85,7 +85,7 @@ RUNTIME_DB_FILE = "data/local_runtime.db"
 LOGS_DIR = "logs/"
 
 # === SCHEDULER ===
-CHECK_INTERVAL_MINUTES = 15
+CHECK_INTERVAL_MINUTES = 5
 MARKET_OPEN_HOUR = 7
 MARKET_CLOSE_HOUR = 20
 TRADE_DAYS = [0, 1, 2, 3, 4]

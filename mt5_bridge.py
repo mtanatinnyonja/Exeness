@@ -65,9 +65,19 @@ class PaperBroker:
         spread = 0.0002 if "JPY" not in instrument else 0.02
         return mid - spread / 2, mid + spread / 2
 
+    def _pip_size(self, instrument: str) -> float:
+        name = str(instrument).upper()
+        if name.startswith(("XAU", "XAG")):
+            return 0.01
+        if name.startswith(("BTC", "ETH")):
+            return 1.0
+        if "JPY" in name:
+            return 0.01
+        return 0.0001
+
     def get_spread_pips(self, instrument: str) -> float:
         bid, ask = self.get_current_price(instrument)
-        return (ask - bid) * (100 if "JPY" in instrument else 10000)
+        return round((ask - bid) / self._pip_size(instrument), 1)
 
     def calculate_units(self, instrument: str, risk_usd: float, stop_loss_pips: float) -> int:
         if stop_loss_pips <= 0:
@@ -77,7 +87,7 @@ class PaperBroker:
     def place_market_order(self, instrument: str, direction: str, units: int, stop_loss_pips: float, take_profit_pips: float, comment: str = "") -> Optional[Dict]:
         bid, ask = self.get_current_price(instrument)
         entry = ask if direction == "BUY" else bid
-        pip = 0.01 if "JPY" in instrument else 0.0001
+        pip = self._pip_size(instrument)
         return {
             "broker_id": f"paper-{int(datetime.utcnow().timestamp())}",
             "instrument": instrument,
@@ -146,14 +156,15 @@ class MT5Broker:
 
         self.connected = True
         is_demo = self._is_demo_account(account)
-        self.safe_to_trade = bool(is_demo and ALLOW_TRADE_EXECUTION)
+        runtime = RuntimeStore().get_settings()
+        self.safe_to_trade = bool(is_demo and runtime.get("allow_trade_execution", ALLOW_TRADE_EXECUTION))
         server = getattr(account, "server", "")
         company = getattr(account, "company", "")
         login = getattr(account, "login", "")
 
         if REQUIRE_DEMO_ACCOUNT and not is_demo:
             self.status_message = f"Compte MT5 connecté ({server}) détecté en lecture seule, pas en démo."
-        elif ALLOW_TRADE_EXECUTION and is_demo:
+        elif self.safe_to_trade:
             self.status_message = f"MT5 démo détecté et prêt au trading: {login} @ {server}"
         else:
             self.status_message = f"MT5 détecté: {login} @ {server} ({company}) - mode analyse/paper"
@@ -197,8 +208,19 @@ class MT5Broker:
         }
         return mapping.get(granularity, self.mt5.TIMEFRAME_H1)
 
-    def _pip_factor(self, symbol: str) -> int:
-        return 100 if "JPY" in symbol.upper() else 10000
+    def _pip_size(self, symbol: str) -> float:
+        info = self.mt5.symbol_info(symbol) if self.mt5 else None
+        point = float(getattr(info, "point", 0.0001) or 0.0001)
+        digits = int(getattr(info, "digits", 5) or 5)
+        name = str(symbol).upper()
+        if name.startswith(("XAU", "XAG")):
+            return max(point * 10, 0.01)
+        if name.startswith(("BTC", "ETH")):
+            return max(point * 100, 1.0)
+        return point * 10 if digits in {3, 5} else point
+
+    def _pip_factor(self, symbol: str) -> float:
+        return 1.0 / max(self._pip_size(symbol), 1e-10)
 
     def list_visible_symbols(self) -> List[str]:
         self._ensure_ready()
@@ -353,7 +375,7 @@ class MT5Broker:
     def get_spread_pips(self, instrument: str) -> float:
         symbol = self._resolve_symbol(instrument)
         bid, ask = self.get_current_price(instrument)
-        return (ask - bid) * self._pip_factor(symbol)
+        return round((ask - bid) * self._pip_factor(symbol), 1)
 
     def calculate_units(self, instrument: str, risk_usd: float, stop_loss_pips: float) -> int:
         if stop_loss_pips <= 0:
@@ -365,7 +387,7 @@ class MT5Broker:
         symbol = self._resolve_symbol(instrument)
         bid, ask = self.get_current_price(instrument)
         price = ask if direction == "BUY" else bid
-        pip = 0.01 if "JPY" in symbol.upper() else 0.0001
+        pip = self._pip_size(symbol)
         sl = price - stop_loss_pips * pip if direction == "BUY" else price + stop_loss_pips * pip
         tp = price + take_profit_pips * pip if direction == "BUY" else price - take_profit_pips * pip
 

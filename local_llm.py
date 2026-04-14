@@ -93,6 +93,10 @@ class LocalIntelligence:
         match = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*pips", market_context or "")
         return float(match.group(1)) if match else 0.0
 
+    def _compact_memory_context(self, raw_text: str, limit: int = 1200) -> str:
+        compact = " ".join(str(raw_text or "").split())
+        return compact[:limit]
+
     def _safe_wait(self, instrument: str, reason: str) -> Dict:
         return {
             "decision": "WAIT",
@@ -184,7 +188,7 @@ class LocalIntelligence:
                     "format": "json",
                     "options": {
                         "temperature": self.llm_temperature,
-                        "num_predict": 260,
+                        "num_predict": 160,
                     },
                 },
                 timeout=self.local_llm_timeout,
@@ -212,7 +216,7 @@ class LocalIntelligence:
     def analyze_signal(self, instrument: str, signal: Dict, account_info: Dict, market_context: str = "", fast_mode: bool = False) -> Optional[Dict]:
         self.refresh_runtime_settings()
         today_pnl = self.memory.get_daily_pnl()
-        memory_context = self.memory.get_context_for_llm()
+        memory_context = self._compact_memory_context(self.memory.get_context_for_llm())
         spread = self._extract_spread(market_context)
 
         prompt = f"""
