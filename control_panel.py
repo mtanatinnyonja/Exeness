@@ -534,7 +534,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
         <button class="btn" onclick="saveSettings()">Sauvegarder</button>
         <button class="btn" onclick="testAI()">Tester IA</button>
         <button class="btn secondary" id="auto-ai-btn" onclick="toggleAutoAI()">Auto IA: ON</button>
-        <span class="refresh-info" id="ai-mode-note">Le bot autonome peut ouvrir et fermer des ordres réels sur le compte démo si le trading réel est activé. Ce bouton montre instantanément la décision sur la paire active.</span>
+        <span class="refresh-info" id="ai-mode-note">Le cockpit affiche un signal IA en aperçu sur la paire active. Un ordre réel MT5 n'est envoyé que par le cycle automatique quand toutes les validations sont encore confirmées.</span>
       </div>
       <div id="ai-test-result" class="refresh-info" style="margin-top:10px;white-space:normal;line-height:1.6;">Chargement de l'analyse automatique sur la paire active...</div>
 
@@ -952,8 +952,8 @@ async function testAI() {
         ? 'mode réel démo actif'
         : 'mode aperçu actif';
       document.getElementById('ai-test-result').textContent =
-        'Décision live paire active · ' + (data.result?.instrument || '—') + ' · ' +
-        (d.decision || 'WAIT') + ' · confiance ' + Math.round((parseFloat(d.confidence || 0) || 0) * 100) + '% · ' + liveMode;
+        'Signal IA aperçu · ' + (data.result?.instrument || '—') + ' · ' +
+        (d.decision || 'WAIT') + ' · confiance ' + Math.round((parseFloat(d.confidence || 0) || 0) * 100) + '% · ' + liveMode + ' · ordre réel uniquement si le cycle d\'exécution confirme encore le setup.';
     } else {
       document.getElementById('ai-test-result').textContent = 'Erreur test IA: ' + (data.error || 'inconnue');
     }
@@ -990,7 +990,7 @@ async function fetchStatus() {
     const modeNote = document.getElementById('ai-mode-note');
     if (modeNote) {
       modeNote.textContent = allowTrade
-        ? 'Le bot autonome peut ouvrir et fermer des ordres réels sur le compte démo si le trading réel est activé. Ce bouton montre instantanément la décision sur la paire active.'
+        ? 'Le cockpit affiche un signal IA en aperçu sur la paire active. Un ordre réel MT5 n\'est envoyé que par le cycle automatique quand toutes les validations sont encore confirmées.'
         : 'Le bot autonome analyse la paire active en continu. Active le trading réel démo pour autoriser les ouvertures et fermetures automatiques.';
     }
     syncFocusPairs(data.active_symbols || [], data.settings?.preferred_symbols || []);

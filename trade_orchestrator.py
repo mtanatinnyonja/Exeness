@@ -404,12 +404,6 @@ class TradeOrchestrator:
         candles = self.broker.get_candles(target, PRIMARY_TIMEFRAME, 120)
         signal = calculate_signal_score(candles)
 
-        if not signal.get("direction"):
-            signal["direction"] = "BUY"
-        if signal.get("score", 0) < MIN_SIGNAL_SCORE:
-            signal["score"] = MIN_SIGNAL_SCORE + 1
-            signal["pattern"] = signal.get("pattern") or "forced_test_mode"
-
         spread = self.broker.get_spread_pips(target)
         context = f"Mode test dashboard. Spread actuel: {spread:.1f} pips."
         decision = self.intelligence.analyze_signal(target, signal, account, context, fast_mode=True)
