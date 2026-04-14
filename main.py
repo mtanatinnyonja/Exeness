@@ -1,135 +1,18 @@
 #!/usr/bin/env python3
 """
-Point d'entrée du Trading Agent Exness / MT5.
-Usage:
-  python main.py once
-  python main.py daemon
-  python main.py status
-  python main.py detect
-  python main.py backtest
+Point d'entrée compatible.
+Conserve la commande python main.py tout en redirigeant vers le robot local actuel.
 """
 
 import sys
-import time
-import json
-import signal
-from datetime import datetime, timezone
-from agent import TradingAgent
-from broker import build_broker
-from indicators import calculate_signal_score
-from config import CHECK_INTERVAL_MINUTES, INSTRUMENTS, MIN_SIGNAL_SCORE, DASHBOARD_PORT
-from runtime_store import RuntimeStore
-
-
-def run_once():
-    print(f"\n[{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}] Démarrage cycle...")
-    agent = TradingAgent()
-    agent.run_cycle()
-    print("Cycle terminé.\n")
-
-
-def run_daemon():
-    store = RuntimeStore()
-    settings = store.get_settings()
-    print("🤖 Trading Agent démarré (daemon mode)")
-    print(f"   Intervalle: {settings.get('check_interval_minutes', CHECK_INTERVAL_MINUTES)} minutes")
-    print("   Ctrl+C pour arrêter\n")
-
-    agent = TradingAgent()
-    running = True
-
-    def handle_stop(sig, frame):
-        nonlocal running
-        print("\n⛔ Signal arrêt reçu...")
-        running = False
-
-    signal.signal(signal.SIGTERM, handle_stop)
-    signal.signal(signal.SIGINT, handle_stop)
-
-    while running:
-        try:
-            agent.run_cycle()
-        except Exception as e:
-            print(f"❌ Erreur cycle: {e}")
-
-        if running:
-            settings = store.get_settings()
-            interval = int(settings.get('check_interval_minutes', CHECK_INTERVAL_MINUTES))
-            print(f"😴 Prochain cycle dans {interval} min...")
-            for _ in range(interval * 60):
-                if not running:
-                    break
-                time.sleep(1)
-
-    print("👋 Agent arrêté proprement.")
-
-
-def show_status():
-    agent = TradingAgent(quiet=True)
-    print(json.dumps(agent.get_status(), indent=2, default=str, ensure_ascii=False))
-
-
-def detect_broker():
-    broker = build_broker()
-    payload = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "broker": {
-            "name": getattr(broker, "name", "unknown"),
-            "connected": getattr(broker, "connected", False),
-            "safe_to_trade": getattr(broker, "safe_to_trade", False),
-            "status_message": getattr(broker, "status_message", ""),
-            "last_error": getattr(broker, "last_error", ""),
-        }
-    }
-    try:
-        payload["account"] = broker.get_account_summary()
-        if hasattr(broker, "get_active_symbols"):
-            payload["active_symbols"] = broker.get_active_symbols()
-    except Exception as e:
-        payload["account_error"] = str(e)
-    print(json.dumps(payload, indent=2, default=str, ensure_ascii=False))
-
-
-def show_settings():
-    broker = build_broker()
-    payload = RuntimeStore().get_settings()
-    payload["broker"] = getattr(broker, "name", "unknown")
-    if hasattr(broker, "get_active_symbols"):
-        try:
-            payload["active_symbols_now"] = broker.get_active_symbols(INSTRUMENTS)
-        except Exception as e:
-            payload["active_symbols_error"] = str(e)
-    print(json.dumps(payload, indent=2, ensure_ascii=False))
-
-
-def run_backtest():
-    print("🔬 Backtest en cours...\n")
-    broker = build_broker()
-
-    for instrument in INSTRUMENTS:
-        print(f"=== {instrument} ===")
-        try:
-            candles = broker.get_candles(instrument, "H1", 300)
-            print(f"Données: {len(candles)} bougies H1")
-
-            signals = 0
-            buys = 0
-            sells = 0
-            for i in range(60, len(candles) - 20):
-                sig = calculate_signal_score(candles[:i])
-                if sig["score"] >= MIN_SIGNAL_SCORE and sig["direction"]:
-                    signals += 1
-                    if sig["direction"] == "BUY":
-                        buys += 1
-                    else:
-                        sells += 1
-
-            print(f"Signaux détectés: {signals}")
-            print(f"  BUY: {buys} | SELL: {sells}")
-            freq = signals / max(1, (len(candles) - 80)) * 100
-            print(f"  Fréquence: ~{freq:.1f}% des bougies\n")
-        except Exception as e:
-            print(f"Erreur: {e}\n")
+from run_bot import (
+    run_once,
+    run_daemon,
+    show_status,
+    detect_broker,
+    run_backtest,
+    show_settings,
+)
 
 
 if __name__ == "__main__":
@@ -147,3 +30,4 @@ if __name__ == "__main__":
         show_settings()
     else:
         run_once()
+

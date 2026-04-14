@@ -262,7 +262,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
   }
   .mini-grid {
     display:grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     gap: 8px;
     margin-top: 10px;
   }
@@ -550,6 +550,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
           <div class="mini-kpi"><div class="label">Instrument</div><div class="value" id="ai-live-symbol">—</div></div>
           <div class="mini-kpi"><div class="label">Décision</div><div class="value" id="ai-live-action">WAIT</div></div>
           <div class="mini-kpi"><div class="label">Confiance</div><div class="value" id="ai-live-confidence">0%</div></div>
+          <div class="mini-kpi"><div class="label">ML local</div><div class="value" id="ai-live-ml">0%</div></div>
           <div class="mini-kpi"><div class="label">Auto</div><div class="value" id="ai-live-auto">ON · 45s</div></div>
         </div>
         <div class="market-deck">
@@ -887,6 +888,7 @@ function renderAiDecision(result) {
   document.getElementById('ai-live-symbol').textContent = result.instrument || '—';
   document.getElementById('ai-live-action').innerHTML = '<span class="ai-pill ' + klass + '">' + action + '</span>';
   document.getElementById('ai-live-confidence').textContent = confidence + '%';
+  document.getElementById('ai-live-ml').textContent = mlProb + '%';
   document.getElementById('ai-live-decision').innerHTML =
     '<strong>' + (result.instrument || '—') + '</strong> · ' +
     '<span class="ai-pill ' + klass + '">' + action + '</span>' +

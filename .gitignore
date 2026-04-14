@@ -13,5 +13,15 @@ data/
 
 # IDE / OS
 .vscode/
+.idea/
 .DS_Store
 Thumbs.db
+
+# Test / temp / cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+*.tmp
+*.bak
+*.pid
