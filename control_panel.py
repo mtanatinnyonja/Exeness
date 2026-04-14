@@ -528,9 +528,9 @@ HTML_PAGE = r"""<!DOCTYPE html>
         <button class="btn" onclick="saveSettings()">Sauvegarder</button>
         <button class="btn" onclick="testAI()">Tester IA</button>
         <button class="btn secondary" id="auto-ai-btn" onclick="toggleAutoAI()">Auto IA: ON</button>
-        <span class="refresh-info">Le bot autonome peut ouvrir des ordres réels sur le compte démo si l'option trading réel est activée. Ce bouton affiche la décision instantanée sur la paire active.</span>
+        <span class="refresh-info" id="ai-mode-note">Le bot autonome peut ouvrir et fermer des ordres réels sur le compte démo si le trading réel est activé. Ce bouton montre instantanément la décision sur la paire active.</span>
       </div>
-      <div id="ai-test-result" class="refresh-info" style="margin-top:10px;white-space:normal;line-height:1.6;">Aucun test IA lancé.</div>
+      <div id="ai-test-result" class="refresh-info" style="margin-top:10px;white-space:normal;line-height:1.6;">Chargement de l'analyse automatique sur la paire active...</div>
 
       <div class="live-ai-box">
         <div class="panel-title" style="margin-bottom:8px;">Cockpit IA en direct</div>
@@ -682,6 +682,7 @@ let autoAiCountdown = 45;
 let autoSaveTimer = null;
 let autoAiEnabled = true;
 let aiBusy = false;
+let initialAiWarmupDone = false;
 let lastAiPayload = null;
 let latestStatusPayload = null;
 let currentFocusPair = '';
@@ -930,9 +931,12 @@ async function testAI() {
       const d = data.result?.decision || {};
       lastAiPayload = data.result || null;
       renderAiDecision(data.result || {});
+      const liveMode = document.getElementById('setting-allow-trade').value === 'true'
+        ? 'mode réel démo actif'
+        : 'mode aperçu actif';
       document.getElementById('ai-test-result').textContent =
-        'Prévision live sans ordre réel · ' + (data.result?.instrument || '—') + ' · ' +
-        (d.decision || 'WAIT') + ' · confiance ' + Math.round((parseFloat(d.confidence || 0) || 0) * 100) + '%';
+        'Décision live paire active · ' + (data.result?.instrument || '—') + ' · ' +
+        (d.decision || 'WAIT') + ' · confiance ' + Math.round((parseFloat(d.confidence || 0) || 0) * 100) + '% · ' + liveMode;
     } else {
       document.getElementById('ai-test-result').textContent = 'Erreur test IA: ' + (data.error || 'inconnue');
     }
@@ -965,10 +969,21 @@ async function fetchStatus() {
     document.getElementById('ai-provider').textContent = data.ai_provider || '—';
     document.getElementById('active-symbols').textContent = (data.active_symbols || []).join(', ') || '—';
     populateSettings(data);
+    const allowTrade = String(data.settings?.allow_trade_execution || false) === 'true';
+    const modeNote = document.getElementById('ai-mode-note');
+    if (modeNote) {
+      modeNote.textContent = allowTrade
+        ? 'Le bot autonome peut ouvrir et fermer des ordres réels sur le compte démo si le trading réel est activé. Ce bouton montre instantanément la décision sur la paire active.'
+        : 'Le bot autonome analyse la paire active en continu. Active le trading réel démo pour autoriser les ouvertures et fermetures automatiques.';
+    }
     syncFocusPairs(data.active_symbols || [], data.settings?.preferred_symbols || []);
     renderAiChart(data);
     if (lastAiPayload) {
       renderAiDecision(lastAiPayload);
+    }
+    if (!initialAiWarmupDone && !aiBusy && currentFocusPair) {
+      initialAiWarmupDone = true;
+      setTimeout(() => testAI(), 300);
     }
 
     // KPIs
@@ -1127,7 +1142,11 @@ function initAutoSave() {
 }
 
 keepLockedModes();
-fetchStatus();
+fetchStatus().finally(() => {
+  if (!initialAiWarmupDone) {
+    setTimeout(() => testAI(), 700);
+  }
+});
 initAutoSave();
 setInterval(tick, 1000);
 </script>

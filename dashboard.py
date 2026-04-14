@@ -8,7 +8,7 @@ Accès: http://localhost:8080
 import json
 import os
 import sys
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from datetime import datetime

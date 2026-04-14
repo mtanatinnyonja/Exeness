@@ -83,8 +83,8 @@ class RuntimeStore:
         }
 
     def _clean_symbol(self, raw: Any) -> str:
-        value = str(raw).strip().upper()
-        value = value.replace(" ", "").replace("/", "").replace("\\", "").replace("_", "")
+        original = str(raw).strip().replace(" ", "").replace("/", "").replace("\\", "").replace("_", "")
+        value = original.upper()
         aliases = {
             "GOLD": "XAUUSD",
             "XAU": "XAUUSD",
@@ -92,7 +92,7 @@ class RuntimeStore:
             "ETH": "ETHUSD",
             "EUROUSD": "EURUSD",
         }
-        return aliases.get(value, value)
+        return aliases.get(value, original)
 
     def _normalize(self, key: str, value: Any) -> Any:
         if key in {"allow_trade_execution"}:

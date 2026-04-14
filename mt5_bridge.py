@@ -234,6 +234,13 @@ class MT5Broker:
         runtime = RuntimeStore().get_settings()
         is_demo = self._is_demo_account(account)
         self.safe_to_trade = bool(is_demo and runtime.get("allow_trade_execution", ALLOW_TRADE_EXECUTION))
+        server = getattr(account, "server", "")
+        company = getattr(account, "company", "")
+        login = getattr(account, "login", "")
+        if self.safe_to_trade:
+            self.status_message = f"MT5 démo actif pour trading automatique: {login} @ {server} ({company})"
+        else:
+            self.status_message = f"MT5 détecté: {login} @ {server} ({company}) - mode analyse/paper"
         return {
             "balance": float(getattr(account, "balance", INITIAL_CAPITAL)),
             "unrealized_pnl": float(getattr(account, "profit", 0.0)),
