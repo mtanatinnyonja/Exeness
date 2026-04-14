@@ -35,9 +35,69 @@ class TradeOrchestrator:
             if broker_note:
                 self.memory.log_session(f"🔌 {broker_note}")
 
-    def is_market_open(self) -> bool:
+    def _get_market_status(self) -> Dict:
+        try:
+            symbols = self.get_target_instruments()
+            if hasattr(self.broker, "get_market_status"):
+                status = self.broker.get_market_status(symbols)
+                if isinstance(status, dict):
+                    return status
+        except Exception as e:
+            self.memory.record_error("market_status", str(e))
+
         now = datetime.now(timezone.utc)
-        return now.weekday() in TRADE_DAYS and MARKET_OPEN_HOUR <= now.hour < MARKET_CLOSE_HOUR
+        scheduled = now.weekday() in TRADE_DAYS and MARKET_OPEN_HOUR <= now.hour < MARKET_CLOSE_HOUR
+        return {
+            "open": scheduled,
+            "symbol": None,
+            "tick_age_sec": None,
+            "reason": "Fenêtre horaire théorique active" if scheduled else "Fenêtre horaire théorique fermée",
+        }
+
+    def is_market_open(self) -> bool:
+        return bool(self._get_market_status().get("open"))
+
+    def _build_live_snapshot(self, instrument: str) -> Dict:
+        candles_live = self.broker.get_candles(instrument, "M1", 60)
+        candles_h1 = self.broker.get_candles(instrument, PRIMARY_TIMEFRAME, 120)
+        signal = calculate_signal_score(candles_h1)
+        details = signal.get("details", {}) or {}
+
+        bid, ask = self.broker.get_current_price(instrument)
+        live_price = (float(bid) + float(ask)) / 2 if (bid or ask) else float(details.get("price", 0) or 0)
+        closes_base = [float(c.get("close", 0) or 0) for c in candles_live[-29:]]
+        closes = closes_base + ([round(live_price, 5)] if live_price else [])
+        highs = [float(c.get("high", 0) or 0) for c in candles_live[-30:]]
+        lows = [float(c.get("low", 0) or 0) for c in candles_live[-30:]]
+
+        previous_close = closes[-2] if len(closes) >= 2 else (closes[-1] if closes else 0)
+        change_pct = ((live_price - previous_close) / previous_close * 100) if previous_close else 0.0
+        change_5m = ((live_price - closes[-6]) / closes[-6] * 100) if len(closes) >= 6 and closes[-6] else 0.0
+        spread = self.broker.get_spread_pips(instrument)
+
+        return {
+            "instrument": instrument,
+            "price": round(live_price, 5),
+            "bid": round(float(bid), 5),
+            "ask": round(float(ask), 5),
+            "support": float(details.get("support", min(lows) if lows else 0) or 0),
+            "resistance": float(details.get("resistance", max(highs) if highs else 0) or 0),
+            "rsi": float(details.get("rsi", 50) or 50),
+            "regime": str(details.get("market_regime", "unknown")),
+            "momentum_5": float(details.get("momentum_5", 0) or 0),
+            "momentum_20": float(details.get("momentum_20", 0) or 0),
+            "trend_strength": float(details.get("trend_strength", 0) or 0),
+            "rr_buy": float(details.get("rr_buy", 0) or 0),
+            "rr_sell": float(details.get("rr_sell", 0) or 0),
+            "signal_bias": float(details.get("signal_bias", 0) or 0),
+            "atr_pips": float(signal.get("atr_pips", 0) or 0),
+            "spread": float(spread or 0),
+            "price_change_pct": round(change_pct, 4),
+            "price_change_5m_pct": round(change_5m, 4),
+            "candle_pattern": str(details.get("candle_pattern") or "—"),
+            "human_summary": str(details.get("human_summary") or "Lecture technique locale."),
+            "closes": [round(v, 5) for v in closes[-30:]],
+        }
 
     def is_cooldown_active(self, instrument: str) -> bool:
         last_time = self.last_signal_time.get(instrument)
@@ -64,8 +124,9 @@ class TradeOrchestrator:
     def run_cycle(self):
         self.memory.log_session("═══ Cycle démarré ═══")
 
-        if not self.is_market_open():
-            self.memory.log_session("⏸️ Marché fermé - cycle ignoré")
+        market_status = self._get_market_status()
+        if not market_status.get("open"):
+            self.memory.log_session(f"⏸️ Marché fermé - cycle ignoré | {market_status.get('reason', 'pas de cotation récente')}")
             return
 
         try:
@@ -317,10 +378,6 @@ class TradeOrchestrator:
             signal["pattern"] = signal.get("pattern") or "forced_test_mode"
 
         spread = self.broker.get_spread_pips(target)
-        details = signal.get("details", {}) or {}
-        closes = [float(c.get("close", 0) or 0) for c in candles[-30:]]
-        highs = [float(c.get("high", 0) or 0) for c in candles[-30:]]
-        lows = [float(c.get("low", 0) or 0) for c in candles[-30:]]
         context = f"Mode test dashboard. Spread actuel: {spread:.1f} pips."
         decision = self.intelligence.analyze_signal(target, signal, account, context, fast_mode=True)
         self.store.record_signal_sample(target, signal, spread, decision or {"decision": "WAIT", "confidence": 0})
@@ -330,22 +387,7 @@ class TradeOrchestrator:
             "decision": decision,
             "provider": self.intelligence.provider,
             "spread": spread,
-            "market_snapshot": {
-                "price": float(details.get("price", closes[-1] if closes else 0) or 0),
-                "support": float(details.get("support", min(lows) if lows else 0) or 0),
-                "resistance": float(details.get("resistance", max(highs) if highs else 0) or 0),
-                "rsi": float(details.get("rsi", 50) or 50),
-                "regime": str(details.get("market_regime", "unknown")),
-                "momentum_5": float(details.get("momentum_5", 0) or 0),
-                "momentum_20": float(details.get("momentum_20", 0) or 0),
-                "trend_strength": float(details.get("trend_strength", 0) or 0),
-                "rr_buy": float(details.get("rr_buy", 0) or 0),
-                "rr_sell": float(details.get("rr_sell", 0) or 0),
-                "signal_bias": float(details.get("signal_bias", 0) or 0),
-                "atr_pips": float(signal.get("atr_pips", 0) or 0),
-                "spread": float(spread or 0),
-                "closes": [round(v, 5) for v in closes],
-            },
+            "market_snapshot": self._build_live_snapshot(target),
         }
 
     def get_status(self) -> Dict:
@@ -363,6 +405,13 @@ class TradeOrchestrator:
         llm_calls = self.memory.get_llm_calls_today()
         active_symbols = self.get_target_instruments()
         focus_symbol = active_symbols[0] if active_symbols else ""
+        market_status = self._get_market_status()
+        live_snapshot = None
+        if focus_symbol:
+            try:
+                live_snapshot = self._build_live_snapshot(focus_symbol)
+            except Exception as e:
+                self.memory.record_error("live_snapshot", str(e))
         raw_logs = self.memory.memory.get("session_log", [])[-80:]
         keep_markers = [
             "Robot démarré", "MT5 détecté", "Cycle démarré", "Cycle terminé",
@@ -376,8 +425,10 @@ class TradeOrchestrator:
         ]
         return {
             "timestamp": datetime.utcnow().isoformat(),
-            "market_open": self.is_market_open(),
+            "market_open": bool(market_status.get("open")),
+            "market_status": market_status,
             "active_symbols": active_symbols,
+            "live_snapshot": live_snapshot,
             "account": account,
             "open_positions": positions,
             "daily_pnl": self.memory.get_daily_pnl(),

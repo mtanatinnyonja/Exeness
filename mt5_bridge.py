@@ -96,6 +96,16 @@ class PaperBroker:
     def get_active_symbols(self, fallback: Optional[List[str]] = None) -> List[str]:
         return []
 
+    def get_market_status(self, symbols: Optional[List[str]] = None, max_tick_age_sec: int = 900) -> Dict:
+        now = datetime.now(timezone.utc)
+        scheduled = now.weekday() < 5
+        return {
+            "open": scheduled,
+            "symbol": (symbols or [None])[0],
+            "tick_age_sec": 0,
+            "reason": "Mode paper local" if scheduled else "Fenêtre de marché fermée en mode paper",
+        }
+
 
 class MT5Broker:
     def __init__(self):
@@ -227,6 +237,50 @@ class MT5Broker:
                 ordered.append(name)
 
         return ordered[:max_symbols]
+
+    def get_market_status(self, symbols: Optional[List[str]] = None, max_tick_age_sec: int = 900) -> Dict:
+        self._ensure_ready()
+        now = datetime.now(timezone.utc)
+        candidates = list(symbols or self.get_active_symbols())
+        freshest = None
+
+        for instrument in candidates:
+            try:
+                symbol = self._resolve_symbol(instrument)
+                tick = self.mt5.symbol_info_tick(symbol)
+                if tick is None:
+                    continue
+                tick_time = datetime.fromtimestamp(int(getattr(tick, "time", 0) or 0), timezone.utc)
+                age_sec = max(0, int((now - tick_time).total_seconds()))
+                bid = float(getattr(tick, "bid", 0.0) or 0.0)
+                ask = float(getattr(tick, "ask", 0.0) or 0.0)
+                entry = {
+                    "open": age_sec <= max_tick_age_sec and (bid > 0 or ask > 0),
+                    "symbol": symbol,
+                    "tick_age_sec": age_sec,
+                    "tick_time": tick_time.isoformat(),
+                    "bid": bid,
+                    "ask": ask,
+                }
+                if freshest is None or age_sec < freshest.get("tick_age_sec", 10**9):
+                    freshest = entry
+            except Exception:
+                continue
+
+        if freshest:
+            freshest["reason"] = (
+                f"Cotations MT5 live sur {freshest['symbol']} · dernier tick {freshest['tick_age_sec']}s"
+                if freshest["open"]
+                else f"Pas de tick récent sur {freshest['symbol']} · {freshest['tick_age_sec']}s"
+            )
+            return freshest
+
+        return {
+            "open": False,
+            "symbol": candidates[0] if candidates else None,
+            "tick_age_sec": None,
+            "reason": "Aucune cotation MT5 disponible",
+        }
 
     def get_account_summary(self) -> Dict:
         self._ensure_ready()

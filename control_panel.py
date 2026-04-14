@@ -829,14 +829,15 @@ function renderPairSnapshot(result) {
   }
 
   const rsi = Math.max(0, Math.min(100, parseFloat(snap.rsi || details.rsi || 0) || 0));
-  const momentum = Math.max(0, Math.min(100, 50 + (parseFloat(snap.momentum_5 || 0) || 0) * 300));
+  const liveMove = parseFloat(snap.price_change_pct ?? snap.momentum_5 ?? 0) || 0;
+  const momentum = Math.max(0, Math.min(100, 50 + liveMove * 180));
   const trend = Math.max(0, Math.min(100, (parseFloat(snap.trend_strength || 0) || 0) * 240));
   const rrPct = Math.max(0, Math.min(100, (parseFloat(rr || 0) || 0) * 35));
 
   document.getElementById('metric-rsi').style.width = rsi + '%';
   document.getElementById('metric-rsi-value').textContent = rsi.toFixed(1);
   document.getElementById('metric-momentum').style.width = momentum + '%';
-  document.getElementById('metric-momentum-value').textContent = (parseFloat(snap.momentum_5 || 0) || 0).toFixed(2) + '%';
+  document.getElementById('metric-momentum-value').textContent = liveMove.toFixed(3) + '%';
   document.getElementById('metric-trend').style.width = trend + '%';
   document.getElementById('metric-trend-value').textContent = (parseFloat(snap.trend_strength || 0) || 0).toFixed(3);
   document.getElementById('metric-rr').style.width = rrPct + '%';
@@ -844,13 +845,14 @@ function renderPairSnapshot(result) {
 
   document.getElementById('pair-market-note').textContent =
     'Prix ' + (parseFloat(snap.price || 0) || 0).toFixed(5) +
-    ' · spread ' + (parseFloat(snap.spread || 0) || 0).toFixed(1) + ' pips · support ' +
+    ' · Δ live ' + (parseFloat(snap.price_change_pct || 0) || 0).toFixed(3) + '% · spread ' +
+    (parseFloat(snap.spread || 0) || 0).toFixed(1) + ' pips · support ' +
     (parseFloat(snap.support || 0) || 0).toFixed(5) + ' · résistance ' +
     (parseFloat(snap.resistance || 0) || 0).toFixed(5);
 
   document.getElementById('pair-flow-note').textContent =
     'Régime ' + (snap.regime || details.market_regime || '—') +
-    ' · bias ' + ((parseFloat(snap.signal_bias || 0) || 0).toFixed(2)) +
+    ' · pattern ' + (snap.candle_pattern || details.candle_pattern || '—') +
     ' · ATR ' + ((parseFloat(snap.atr_pips || signal.atr_pips || 0) || 0).toFixed(1)) + ' pips';
 }
 
@@ -859,9 +861,11 @@ function renderAiDecision(result) {
   const d = result.decision || {};
   const signal = result.signal || {};
   const details = signal.details || {};
+  const snap = result.market_snapshot || {};
   const action = (d.decision || 'WAIT').toUpperCase();
   const klass = action === 'BUY' ? 'buy' : action === 'SELL' ? 'sell' : 'wait';
   const confidence = Math.round((parseFloat(d.confidence || 0) || 0) * 100);
+  const reasoningParts = [d.reasoning, snap.human_summary || details.human_summary].filter(Boolean);
 
   currentFocusPair = result.instrument || currentFocusPair;
   document.getElementById('ai-live-symbol').textContent = result.instrument || '—';
@@ -870,9 +874,9 @@ function renderAiDecision(result) {
   document.getElementById('ai-live-decision').innerHTML =
     '<strong>' + (result.instrument || '—') + '</strong> · ' +
     '<span class="ai-pill ' + klass + '">' + action + '</span>' +
-    ' Score ' + (signal.score || 0) + '/5 · Régime ' + (details.market_regime || '—') +
-    ' · RR ' + ((action === 'SELL' ? details.rr_sell : details.rr_buy) ?? 0) +
-    '<br>' + (d.reasoning || 'Analyse en attente.');
+    ' Score ' + (signal.score || 0) + '/5 · Régime ' + (details.market_regime || snap.regime || '—') +
+    ' · RR ' + ((action === 'SELL' ? (details.rr_sell ?? snap.rr_sell) : (details.rr_buy ?? snap.rr_buy)) ?? 0) +
+    '<br>' + (reasoningParts.join(' · ') || 'Analyse en attente.');
   renderPairSnapshot(result);
 }
 
@@ -958,10 +962,10 @@ async function fetchStatus() {
     const statusText = document.getElementById('status-text');
     if (data.market_open) {
       badge.className = 'open';
-      statusText.textContent = 'MARCHÉ OUVERT';
+      statusText.textContent = data.market_status?.reason || 'MARCHÉ OUVERT';
     } else {
       badge.className = 'closed';
-      statusText.textContent = 'MARCHÉ FERMÉ';
+      statusText.textContent = data.market_status?.reason || 'MARCHÉ FERMÉ';
     }
 
     // Config active
@@ -978,7 +982,15 @@ async function fetchStatus() {
     }
     syncFocusPairs(data.active_symbols || [], data.settings?.preferred_symbols || []);
     renderAiChart(data);
-    if (lastAiPayload) {
+    if (data.live_snapshot) {
+      const livePayload = {
+        instrument: data.live_snapshot.instrument || currentFocusPair || (data.active_symbols || [])[0] || '—',
+        signal: { score: lastAiPayload?.signal?.score || 0, details: data.live_snapshot, atr_pips: data.live_snapshot.atr_pips || 0 },
+        decision: lastAiPayload?.decision || { decision: 'WAIT', confidence: 0, reasoning: data.live_snapshot.human_summary || 'Lecture technique live.' },
+        market_snapshot: data.live_snapshot
+      };
+      renderAiDecision(livePayload);
+    } else if (lastAiPayload) {
       renderAiDecision(lastAiPayload);
     }
     if (!initialAiWarmupDone && !aiBusy && currentFocusPair) {

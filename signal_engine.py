@@ -162,6 +162,19 @@ def detect_market_regime(current_price: float, atr: float, ma_fast: float, ma_sl
     return "trend_bullish" if ma_fast >= ma_slow else "trend_bearish"
 
 
+def build_human_analysis_summary(details: Dict, direction: Optional[str], score: int) -> str:
+    regime = details.get("market_regime", "unknown")
+    rsi = float(details.get("rsi", 50) or 50)
+    pattern = details.get("candle_pattern") or "aucun pattern fort"
+    bias = float(details.get("signal_bias", 0) or 0)
+    rr_buy = float(details.get("rr_buy", 0) or 0)
+    rr_sell = float(details.get("rr_sell", 0) or 0)
+    rr = rr_buy if direction == "BUY" else rr_sell if direction == "SELL" else max(rr_buy, rr_sell)
+    pressure = "acheteuse" if bias > 0.35 else "vendeuse" if bias < -0.35 else "mixte"
+    action = direction or "WAIT"
+    return f"Lecture humaine: régime {regime}, pression {pressure}, pattern {pattern}, RSI {rsi:.1f}, RR {rr:.2f}, score {score}/5, biais {action}."
+
+
 def calculate_signal_score(candles: List[Dict]) -> Dict:
     """
     Calcule un score de signal enrichi avec contexte de trading avancé.
@@ -284,7 +297,11 @@ def calculate_signal_score(candles: List[Dict]) -> Dict:
         bearish_signals += 1
         details["breakout_signal"] = "breakout baissier"
 
-    if candle_pattern in ["hammer", "bullish_engulfing"]:
+    if candle_pattern == "doji":
+        bullish_signals *= 0.85
+        bearish_signals *= 0.85
+        details["pattern_signal"] = "doji → hésitation / attente"
+    elif candle_pattern in ["hammer", "bullish_engulfing"]:
         bullish_signals += 1
         details["pattern_signal"] = f"{candle_pattern} → bullish"
     elif candle_pattern in ["bearish_engulfing"]:
@@ -309,6 +326,7 @@ def calculate_signal_score(candles: List[Dict]) -> Dict:
 
     details["signal_bias"] = round(bullish_signals - bearish_signals, 2)
     details["quality_score"] = round((score / 5) * min(1.5, max(rr, 0.5)), 2)
+    details["human_summary"] = build_human_analysis_summary(details, direction, score)
 
     return {
         "score": score,
