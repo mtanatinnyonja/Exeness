@@ -279,7 +279,7 @@ class TradeOrchestrator:
 
         spread = self.broker.get_spread_pips(target)
         context = f"Mode test dashboard. Spread actuel: {spread:.1f} pips."
-        decision = self.intelligence.analyze_signal(target, signal, account, context)
+        decision = self.intelligence.analyze_signal(target, signal, account, context, fast_mode=True)
         self.store.record_signal_sample(target, signal, spread, decision or {"decision": "WAIT", "confidence": 0})
         return {
             "instrument": target,
@@ -300,6 +300,7 @@ class TradeOrchestrator:
 
         runtime_settings = self.store.get_settings()
         ml_stats = self.store.get_ml_stats()
+        ml_history = self.store.get_recent_ml_samples(28)
         llm_calls = self.memory.get_llm_calls_today()
         return {
             "timestamp": datetime.utcnow().isoformat(),
@@ -326,6 +327,7 @@ class TradeOrchestrator:
             "ai_provider": self.intelligence.provider,
             "token_usage": self.memory.get_token_usage_today(),
             "ml_stats": ml_stats,
+            "ml_history": ml_history,
             "learned_filters": self.memory.memory.get("learned_filters", [])[-5:],
             "runtime_mode": "local-only",
             "profit_target_enabled": float(runtime_settings.get("daily_target", DAILY_TARGET)) > 0,

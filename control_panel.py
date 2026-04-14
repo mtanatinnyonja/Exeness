@@ -248,6 +248,77 @@ HTML_PAGE = r"""<!DOCTYPE html>
     font-size: 12px;
     cursor: pointer;
   }
+  .btn.secondary {
+    background: var(--bg3);
+    border: 1px solid var(--border2);
+    color: var(--text);
+  }
+  .live-ai-box {
+    border: 1px solid var(--border);
+    background: var(--bg3);
+    border-radius: 12px;
+    padding: 12px;
+    margin-top: 12px;
+  }
+  .mini-grid {
+    display:grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin-top: 10px;
+  }
+  .mini-kpi {
+    background: rgba(255,255,255,0.02);
+    border:1px solid var(--border);
+    border-radius: 10px;
+    padding: 8px;
+  }
+  .mini-kpi .label {
+    font-size: 10px;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+  .mini-kpi .value {
+    font-family: var(--mono);
+    font-size: 13px;
+    margin-top: 4px;
+  }
+  .ai-bars {
+    display:flex;
+    align-items:flex-end;
+    gap:4px;
+    height:120px;
+    margin-top:12px;
+    padding-top:8px;
+  }
+  .ai-bar-wrap {
+    flex:1;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:4px;
+  }
+  .ai-bar {
+    width:100%;
+    border-radius: 6px 6px 0 0;
+    min-height: 6px;
+    opacity: 0.95;
+  }
+  .ai-bar-label {
+    font-size:9px;
+    color: var(--muted);
+    font-family: var(--mono);
+  }
+  .ai-pill {
+    display:inline-block;
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size:11px;
+    font-family: var(--mono);
+    margin-right:6px;
+  }
+  .ai-pill.buy { background: rgba(61,255,160,0.12); color: var(--green); }
+  .ai-pill.sell { background: rgba(255,87,87,0.12); color: var(--red); }
+  .ai-pill.wait { background: rgba(255,184,71,0.12); color: var(--amber); }
 
   /* Responsive */
   @media (max-width: 768px) {
@@ -390,9 +461,22 @@ HTML_PAGE = r"""<!DOCTYPE html>
       <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
         <button class="btn" onclick="saveSettings()">Sauvegarder</button>
         <button class="btn" onclick="testAI()">Tester IA</button>
-        <span class="refresh-info">Analyse 100% LLM local: symboles visibles MT5 uniquement, moteur Ollama uniquement.</span>
+        <button class="btn secondary" id="auto-ai-btn" onclick="toggleAutoAI()">Auto IA: ON</button>
+        <span class="refresh-info">Le test IA lance une prévision live BUY / SELL / WAIT sans ouvrir d'ordre réel.</span>
       </div>
       <div id="ai-test-result" class="refresh-info" style="margin-top:10px;white-space:normal;line-height:1.6;">Aucun test IA lancé.</div>
+
+      <div class="live-ai-box">
+        <div class="panel-title" style="margin-bottom:8px;">Cockpit IA en direct</div>
+        <div id="ai-live-decision" class="refresh-info" style="white-space:normal;line-height:1.6;">En attente d'une analyse IA...</div>
+        <div class="mini-grid">
+          <div class="mini-kpi"><div class="label">Instrument</div><div class="value" id="ai-live-symbol">—</div></div>
+          <div class="mini-kpi"><div class="label">Décision</div><div class="value" id="ai-live-action">WAIT</div></div>
+          <div class="mini-kpi"><div class="label">Confiance</div><div class="value" id="ai-live-confidence">0%</div></div>
+          <div class="mini-kpi"><div class="label">Auto</div><div class="value" id="ai-live-auto">ON · 45s</div></div>
+        </div>
+        <div id="ai-history-chart" class="ai-bars"></div>
+      </div>
     </div>
   </div>
 
@@ -508,7 +592,11 @@ HTML_PAGE = r"""<!DOCTYPE html>
 
 <script>
 let countdown = 5;
+let autoAiCountdown = 45;
 let autoSaveTimer = null;
+let autoAiEnabled = true;
+let aiBusy = false;
+let lastAiPayload = null;
 
 function fmtPnl(val) {
   const v = parseFloat(val) || 0;
@@ -591,26 +679,81 @@ async function saveSettings(silent = false) {
   }
 }
 
+function renderAiDecision(result) {
+  if (!result) return;
+  const d = result.decision || {};
+  const signal = result.signal || {};
+  const details = signal.details || {};
+  const action = (d.decision || 'WAIT').toUpperCase();
+  const klass = action === 'BUY' ? 'buy' : action === 'SELL' ? 'sell' : 'wait';
+  const confidence = Math.round((parseFloat(d.confidence || 0) || 0) * 100);
+
+  document.getElementById('ai-live-symbol').textContent = result.instrument || '—';
+  document.getElementById('ai-live-action').innerHTML = '<span class="ai-pill ' + klass + '">' + action + '</span>';
+  document.getElementById('ai-live-confidence').textContent = confidence + '%';
+  document.getElementById('ai-live-decision').innerHTML =
+    '<strong>' + (result.instrument || '—') + '</strong> · ' +
+    '<span class="ai-pill ' + klass + '">' + action + '</span>' +
+    ' Score ' + (signal.score || 0) + '/5 · Régime ' + (details.market_regime || '—') +
+    ' · RR ' + ((action === 'SELL' ? details.rr_sell : details.rr_buy) ?? 0) +
+    '<br>' + (d.reasoning || 'Analyse en attente.');
+}
+
+function renderAiChart(data) {
+  const rows = (data.ml_history || []).slice(-20);
+  const el = document.getElementById('ai-history-chart');
+  if (!rows.length) {
+    el.innerHTML = '<div class="refresh-info">Pas encore d\'historique IA.</div>';
+    return;
+  }
+  el.innerHTML = rows.map((row, idx) => {
+    const decision = String(row.decision || 'WAIT').toUpperCase();
+    const conf = Math.max(6, Math.round((parseFloat(row.confidence || 0) || 0) * 100));
+    const color = decision === 'BUY' ? 'var(--green)' : decision === 'SELL' ? 'var(--red)' : 'var(--amber)';
+    const label = (row.instrument || '—').slice(0, 3);
+    return '<div class="ai-bar-wrap" title="' + (row.instrument || '—') + ' | ' + decision + ' | conf ' + conf + '%">' +
+      '<div class="ai-bar" style="height:' + conf + '%;background:' + color + '"></div>' +
+      '<div class="ai-bar-label">' + label + '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function toggleAutoAI() {
+  autoAiEnabled = !autoAiEnabled;
+  autoAiCountdown = 45;
+  document.getElementById('auto-ai-btn').textContent = 'Auto IA: ' + (autoAiEnabled ? 'ON' : 'OFF');
+  document.getElementById('ai-live-auto').textContent = autoAiEnabled ? 'ON · 45s' : 'OFF';
+}
+
 async function testAI() {
+  if (aiBusy) return;
+  aiBusy = true;
   document.getElementById('ai-test-result').textContent = 'Test IA en cours...';
   const typed = (document.getElementById('setting-preferred-symbols').value || '').split(',')[0]?.trim();
   const visible = (document.getElementById('active-symbols').textContent || '').split(',')[0]?.trim();
   const symbol = typed || visible || 'XAUUSDm';
-  const res = await fetch('/api/test-ai', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ instrument: symbol })
-  });
-  const data = await res.json();
-  if (data.ok) {
-    const d = data.result?.decision || {};
-    document.getElementById('ai-test-result').textContent =
-      'Provider: ' + (data.result?.provider || '—') + ' | Instrument: ' + (data.result?.instrument || '—') +
-      ' | Decision: ' + (d.decision || 'WAIT') + ' | Confidence: ' + (d.confidence ?? 0);
-  } else {
-    document.getElementById('ai-test-result').textContent = 'Erreur test IA: ' + (data.error || 'inconnue');
+  try {
+    const res = await fetch('/api/test-ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instrument: symbol })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      const d = data.result?.decision || {};
+      lastAiPayload = data.result || null;
+      renderAiDecision(data.result || {});
+      document.getElementById('ai-test-result').textContent =
+        'Prévision live sans ordre réel · ' + (data.result?.instrument || '—') + ' · ' +
+        (d.decision || 'WAIT') + ' · confiance ' + Math.round((parseFloat(d.confidence || 0) || 0) * 100) + '%';
+    } else {
+      document.getElementById('ai-test-result').textContent = 'Erreur test IA: ' + (data.error || 'inconnue');
+    }
+  } finally {
+    aiBusy = false;
+    autoAiCountdown = 45;
+    await fetchStatus();
   }
-  await fetchStatus();
 }
 
 async function fetchStatus() {
@@ -634,6 +777,10 @@ async function fetchStatus() {
     document.getElementById('ai-provider').textContent = data.ai_provider || '—';
     document.getElementById('active-symbols').textContent = (data.active_symbols || []).join(', ') || '—';
     populateSettings(data);
+    renderAiChart(data);
+    if (lastAiPayload) {
+      renderAiDecision(lastAiPayload);
+    }
 
     // KPIs
     const balance = data.account?.balance || 0;
@@ -745,10 +892,17 @@ async function fetchStatus() {
 // Countdown & auto-refresh
 function tick() {
   countdown--;
+  autoAiCountdown--;
   document.getElementById('countdown').textContent = countdown;
+  if (autoAiEnabled) {
+    document.getElementById('ai-live-auto').textContent = 'ON · ' + Math.max(0, autoAiCountdown) + 's';
+  }
   if (countdown <= 0) {
     countdown = 5;
     fetchStatus();
+  }
+  if (autoAiEnabled && autoAiCountdown <= 0 && !aiBusy) {
+    testAI();
   }
 }
 

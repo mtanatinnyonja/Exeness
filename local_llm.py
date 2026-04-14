@@ -209,7 +209,7 @@ class LocalIntelligence:
             self.memory.record_error("ollama", str(e))
             return None
 
-    def analyze_signal(self, instrument: str, signal: Dict, account_info: Dict, market_context: str = "") -> Optional[Dict]:
+    def analyze_signal(self, instrument: str, signal: Dict, account_info: Dict, market_context: str = "", fast_mode: bool = False) -> Optional[Dict]:
         self.refresh_runtime_settings()
         today_pnl = self.memory.get_daily_pnl()
         memory_context = self.memory.get_context_for_llm()
@@ -247,7 +247,13 @@ Réponse attendue uniquement en JSON:
 """
 
         result = None
-        if self.provider == "ollama":
+        if fast_mode:
+            result = self._technical_fallback_decision(
+                instrument,
+                signal,
+                "Mode aperçu rapide du dashboard."
+            )
+        elif self.provider == "ollama":
             result = self._call_ollama(prompt, today_pnl, instrument)
 
         if result is None:

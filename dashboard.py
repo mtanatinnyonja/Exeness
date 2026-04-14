@@ -734,63 +734,11 @@ setInterval(tick, 1000);
 </html>"""
 
 
-class Handler(BaseHTTPRequestHandler):
-    def log_message(self, format, *args):
-        pass  # Silence les logs HTTP
-
-    def _send_json(self, payload, status=200):
-        body = json.dumps(payload, default=str, ensure_ascii=False).encode('utf-8')
-        self.send_response(status)
-        self.send_header('Content-Type', 'application/json; charset=utf-8')
-        self.send_header('Content-Length', len(body))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def do_GET(self):
-        if self.path == '/api/status':
-            try:
-                from agent import TradingAgent
-                agent = TradingAgent(quiet=True)
-                status = agent.get_status()
-                self._send_json(status)
-            except Exception as e:
-                self._send_json({"error": str(e)}, status=500)
-        else:
-            body = HTML_PAGE.encode()
-            self.send_response(200)
-            self.send_header('Content-Type', 'text/html; charset=utf-8')
-            self.send_header('Content-Length', len(body))
-            self.end_headers()
-            self.wfile.write(body)
-
-    def do_POST(self):
-        if self.path == '/api/settings':
-            try:
-                from runtime_store import RuntimeStore
-                length = int(self.headers.get('Content-Length', '0'))
-                raw = self.rfile.read(length).decode('utf-8') if length else '{}'
-                payload = json.loads(raw)
-                settings = RuntimeStore().update_settings(payload)
-                self._send_json({"ok": True, "settings": settings})
-            except Exception as e:
-                self._send_json({"ok": False, "error": str(e)}, status=500)
-        elif self.path == '/api/test-ai':
-            try:
-                from agent import TradingAgent
-                length = int(self.headers.get('Content-Length', '0'))
-                raw = self.rfile.read(length).decode('utf-8') if length else '{}'
-                payload = json.loads(raw)
-                agent = TradingAgent(quiet=True)
-                result = agent.preview_ai_decision(payload.get('instrument'))
-                self._send_json({"ok": True, "result": result})
-            except Exception as e:
-                self._send_json({"ok": False, "error": str(e)}, status=500)
-        else:
-            self._send_json({"ok": False, "error": "route inconnue"}, status=404)
+from control_panel import Handler
 
 
 if __name__ == '__main__':
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
     print(f"🌐 Dashboard: http://localhost:{port}")
     server = ThreadingHTTPServer(('0.0.0.0', port), Handler)
     server.serve_forever()

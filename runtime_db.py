@@ -190,3 +190,28 @@ class RuntimeStore:
                 "timestamp": last[2],
             } if last else None,
         }
+
+    def get_recent_ml_samples(self, limit: int = 24) -> list[Dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT ts, instrument, score, direction, spread, decision, confidence
+                FROM ml_samples
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (int(limit),),
+            ).fetchall()
+
+        return [
+            {
+                "timestamp": row[0],
+                "instrument": row[1],
+                "score": float(row[2] or 0),
+                "direction": row[3],
+                "spread": float(row[4] or 0),
+                "decision": row[5] or "WAIT",
+                "confidence": float(row[6] or 0),
+            }
+            for row in rows[::-1]
+        ]
