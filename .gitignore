@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+
+# Local runtime data
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE / OS
+.vscode/
+.DS_Store
+Thumbs.db
