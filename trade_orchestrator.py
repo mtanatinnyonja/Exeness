@@ -17,6 +17,7 @@ from mt5_bridge import build_broker
 from signal_engine import calculate_signal_score
 from local_llm import LocalIntelligence
 from runtime_db import RuntimeStore
+from ml_model import LocalSignalModel
 
 
 class TradeOrchestrator:
@@ -25,6 +26,7 @@ class TradeOrchestrator:
         self.store = RuntimeStore()
         self.broker = build_broker()
         self.intelligence = LocalIntelligence(self.memory)
+        self.ml_model = LocalSignalModel(self.store, self.broker)
         self.last_signal_time = {}
 
         if not quiet:
@@ -253,6 +255,16 @@ class TradeOrchestrator:
                 self.memory.log_session(f"🛡️ {instrument}: trade ignoré, risk/reward trop faible ({chosen_rr:.2f} < {min_rr:.2f})")
                 return
 
+            ml_eval = self.ml_model.evaluate_signal(signal_h1, spread)
+            self.memory.log_session(
+                f"🧠 ML local {instrument}: p={ml_eval.get('probability', 0):.2f} | "
+                f"samples={ml_eval.get('sample_count', 0)} | source={ml_eval.get('source', 'n/a')}"
+            )
+            signal_h1['ml_probability'] = ml_eval.get('probability', 0)
+            if ml_eval.get('trained') and float(ml_eval.get('probability', 0) or 0) < 0.46:
+                self.memory.log_session(f"🛡️ {instrument}: ML bloque le trade, proba de réussite trop faible")
+                return
+
             if regime == "range" and score < (MIN_SIGNAL_SCORE + 1):
                 self.memory.log_session(f"🛡️ {instrument}: marché trop neutre pour un trade avancé")
                 return
@@ -280,7 +292,8 @@ class TradeOrchestrator:
 
             self.store.record_signal_sample(instrument, signal_h1, spread, decision)
 
-            decision["risk_multiplier"] = learning["risk_multiplier"]
+            ml_boost = 1.1 if float(ml_eval.get('probability', 0) or 0) >= 0.60 else 1.0
+            decision["risk_multiplier"] = round(learning["risk_multiplier"] * ml_boost, 2)
             instrument_positions = [p for p in self.broker.get_open_positions() if str(p.get("instrument", "")).upper() == instrument.upper()]
 
             if decision["decision"] in ["BUY", "SELL"]:
@@ -407,6 +420,11 @@ class TradeOrchestrator:
         spread = self.broker.get_spread_pips(target)
         context = f"Mode test dashboard. Spread actuel: {spread:.1f} pips."
         decision = self.intelligence.analyze_signal(target, signal, account, context, fast_mode=True)
+        ml_eval = self.ml_model.evaluate_signal(signal, spread)
+        signal["ml_probability"] = ml_eval.get("probability", 0)
+        if isinstance(decision, dict):
+            decision["ml_probability"] = ml_eval.get("probability", 0)
+            decision["ml_trained"] = ml_eval.get("trained", False)
         self.store.record_signal_sample(target, signal, spread, decision or {"decision": "WAIT", "confidence": 0})
         return {
             "instrument": target,
@@ -414,6 +432,7 @@ class TradeOrchestrator:
             "decision": decision,
             "provider": self.intelligence.provider,
             "spread": spread,
+            "ml_eval": ml_eval,
             "market_snapshot": self._build_live_snapshot(target),
         }
 
@@ -429,6 +448,7 @@ class TradeOrchestrator:
         runtime_settings = self.store.get_settings()
         ml_stats = self.store.get_ml_stats()
         ml_history = self.store.get_recent_ml_samples(28)
+        ml_model_state = self.ml_model.get_status()
         llm_calls = self.memory.get_llm_calls_today()
         active_symbols = self.get_target_instruments()
         focus_symbol = active_symbols[0] if active_symbols else ""
@@ -477,6 +497,7 @@ class TradeOrchestrator:
             "ai_provider": self.intelligence.provider,
             "token_usage": self.memory.get_token_usage_today(),
             "ml_stats": ml_stats,
+            "ml_model_state": ml_model_state,
             "ml_history": ml_history,
             "learned_filters": self.memory.memory.get("learned_filters", [])[-5:],
             "runtime_mode": "local-only",

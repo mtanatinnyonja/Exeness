@@ -4,7 +4,7 @@ Aucun broker cloud: seulement MT5 déjà ouvert ou paper trading local.
 """
 
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Tuple
 
 from settings import (
@@ -115,6 +115,25 @@ class PaperBroker:
             "tick_age_sec": 0,
             "reason": "Mode paper local" if scheduled else "Fenêtre de marché fermée en mode paper",
         }
+
+    def get_signal_outcome_label(self, instrument: str, sample_time: str, direction: str, spread: float = 0.0, horizon_minutes: int = 15) -> Optional[int]:
+        try:
+            start = datetime.fromisoformat(str(sample_time).replace('Z', '+00:00'))
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=timezone.utc)
+            end = start + timedelta(minutes=horizon_minutes)
+            candles = self.get_candles(instrument, 'M1', max(20, horizon_minutes + 2))
+            if len(candles) < 5:
+                return None
+            entry = float(candles[0].get('open', 0) or 0)
+            exit_price = float(candles[-1].get('close', 0) or 0)
+            pip = max(self._pip_size(instrument), 1e-6)
+            move = (exit_price - entry) / pip
+            signed = move if str(direction).upper() == 'BUY' else -move
+            threshold = max(1.0, float(spread or 0) * 0.15)
+            return 1 if signed > threshold else 0
+        except Exception:
+            return None
 
 
 class MT5Broker:
@@ -303,6 +322,23 @@ class MT5Broker:
             "tick_age_sec": None,
             "reason": "Aucune cotation MT5 disponible",
         }
+
+    def get_signal_outcome_label(self, instrument: str, sample_time: str, direction: str, spread: float = 0.0, horizon_minutes: int = 15) -> Optional[int]:
+        self._ensure_ready()
+        symbol = self._resolve_symbol(instrument)
+        start = datetime.fromisoformat(str(sample_time).replace('Z', '+00:00'))
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        end = start + timedelta(minutes=horizon_minutes)
+        rates = self.mt5.copy_rates_range(symbol, self.mt5.TIMEFRAME_M1, start, end)
+        if rates is None or len(rates) < 5:
+            return None
+        entry = float(rates[0]['open'])
+        exit_price = float(rates[-1]['close'])
+        move = (exit_price - entry) * self._pip_factor(symbol)
+        signed = move if str(direction).upper() == 'BUY' else -move
+        threshold = max(1.0, float(spread or 0) * 0.15)
+        return 1 if signed > threshold else 0
 
     def get_account_summary(self) -> Dict:
         self._ensure_ready()

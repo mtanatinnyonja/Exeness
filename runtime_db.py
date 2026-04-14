@@ -215,3 +215,30 @@ class RuntimeStore:
             }
             for row in rows[::-1]
         ]
+
+    def get_ml_training_samples(self, limit: int = 220) -> list[Dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT ts, instrument, score, direction, rsi, macd, spread, decision, confidence
+                FROM ml_samples
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (int(limit),),
+            ).fetchall()
+
+        return [
+            {
+                "timestamp": row[0],
+                "instrument": row[1],
+                "score": float(row[2] or 0),
+                "direction": row[3],
+                "rsi": float(row[4] or 50),
+                "macd": float(row[5] or 0),
+                "spread": float(row[6] or 0),
+                "decision": row[7] or "WAIT",
+                "confidence": float(row[8] or 0),
+            }
+            for row in rows[::-1]
+        ]

@@ -725,8 +725,11 @@ function populateSettings(data) {
   document.getElementById('setting-allow-trade').value = String(settings.allow_trade_execution || false);
 
   const ml = data.ml_stats || {};
-  document.getElementById('ml-samples').textContent = ml.samples || 0;
-  document.getElementById('ml-info').textContent = 'avg score ' + ((ml.avg_score || 0).toFixed ? ml.avg_score.toFixed(2) : ml.avg_score || 0);
+  const modelState = data.ml_model_state || {};
+  document.getElementById('ml-samples').textContent = modelState.sample_count || ml.samples || 0;
+  document.getElementById('ml-info').textContent = modelState.trained
+    ? 'modèle entraîné · acc ' + Math.round((parseFloat(modelState.accuracy || 0) || 0) * 100) + '%'
+    : 'bootstrap actif · avg score ' + ((ml.avg_score || 0).toFixed ? ml.avg_score.toFixed(2) : ml.avg_score || 0);
 }
 
 function scheduleAutoSave() {
@@ -873,9 +876,11 @@ function renderAiDecision(result) {
   const signal = result.signal || {};
   const details = signal.details || {};
   const snap = result.market_snapshot || {};
+  const ml = result.ml_eval || {};
   const action = (d.decision || 'WAIT').toUpperCase();
   const klass = action === 'BUY' ? 'buy' : action === 'SELL' ? 'sell' : 'wait';
   const confidence = Math.round((parseFloat(d.confidence || 0) || 0) * 100);
+  const mlProb = Math.round((parseFloat(d.ml_probability ?? signal.ml_probability ?? ml.probability ?? 0) || 0) * 100);
   const reasoningParts = [d.reasoning, snap.human_summary || details.human_summary].filter(Boolean);
 
   currentFocusPair = result.instrument || currentFocusPair;
@@ -887,6 +892,7 @@ function renderAiDecision(result) {
     '<span class="ai-pill ' + klass + '">' + action + '</span>' +
     ' Score ' + (signal.score || 0) + '/5 · Régime ' + (details.market_regime || snap.regime || '—') +
     ' · RR ' + ((action === 'SELL' ? (details.rr_sell ?? snap.rr_sell) : (details.rr_buy ?? snap.rr_buy)) ?? 0) +
+    ' · ML ' + mlProb + '%' +
     '<br>' + (reasoningParts.join(' · ') || 'Analyse en attente.');
   renderPairSnapshot(result);
 }
@@ -951,9 +957,10 @@ async function testAI() {
       const liveMode = document.getElementById('setting-allow-trade').value === 'true'
         ? 'mode réel démo actif'
         : 'mode aperçu actif';
+      const mlProb = Math.round((parseFloat(d.ml_probability ?? data.result?.ml_eval?.probability ?? 0) || 0) * 100);
       document.getElementById('ai-test-result').textContent =
         'Signal IA aperçu · ' + (data.result?.instrument || '—') + ' · ' +
-        (d.decision || 'WAIT') + ' · confiance ' + Math.round((parseFloat(d.confidence || 0) || 0) * 100) + '% · ' + liveMode + ' · ordre réel uniquement si le cycle d\'exécution confirme encore le setup.';
+        (d.decision || 'WAIT') + ' · confiance ' + Math.round((parseFloat(d.confidence || 0) || 0) * 100) + '% · ML ' + mlProb + '% · ' + liveMode + ' · ordre réel uniquement si le cycle d\'exécution confirme encore le setup.';
     } else {
       document.getElementById('ai-test-result').textContent = 'Erreur test IA: ' + (data.error || 'inconnue');
     }
