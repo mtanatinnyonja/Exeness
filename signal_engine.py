@@ -1,6 +1,6 @@
 """
-Calcul des indicateurs techniques
-RSI, MA, Bollinger Bands, ATR, Signal Score
+Calcul des indicateurs techniques avancés.
+RSI, MA, Bollinger Bands, ATR, momentum, régime marché et score de trading.
 """
 
 import math
@@ -119,13 +119,56 @@ def detect_candle_pattern(candles: List[Dict]) -> Optional[str]:
     return None
 
 
+def calculate_price_momentum(closes: List[float], lookback: int = 10) -> float:
+    if len(closes) < lookback + 1:
+        return 0.0
+    base = closes[-lookback - 1]
+    if base == 0:
+        return 0.0
+    return ((closes[-1] - base) / base) * 100
+
+
+def calculate_trend_strength(closes: List[float], period: int = 20) -> float:
+    if len(closes) < period + 1:
+        return 0.0
+    recent = closes[-period:]
+    start = recent[0]
+    if start == 0:
+        return 0.0
+    net_move = abs(recent[-1] - start)
+    path = sum(abs(recent[i] - recent[i - 1]) for i in range(1, len(recent)))
+    efficiency = (net_move / path) if path else 0.0
+    slope_pct = abs((recent[-1] - start) / start) * 100
+    return round(slope_pct * (0.5 + efficiency), 4)
+
+
+def calculate_support_resistance(highs: List[float], lows: List[float], window: int = 20) -> Tuple[float, float]:
+    if len(highs) < window or len(lows) < window:
+        return max(highs[-5:] or [0]), min(lows[-5:] or [0])
+    resistance = max(highs[-window:])
+    support = min(lows[-window:])
+    return resistance, support
+
+
+def detect_market_regime(current_price: float, atr: float, ma_fast: float, ma_slow: float) -> str:
+    if current_price <= 0:
+        return "unknown"
+    atr_pct = (atr / current_price) * 100
+    ma_gap_pct = abs(ma_fast - ma_slow) / current_price * 100
+    if atr_pct >= 0.8:
+        return "volatile"
+    if ma_gap_pct < 0.05:
+        return "range"
+    return "trend_bullish" if ma_fast >= ma_slow else "trend_bearish"
+
+
 def calculate_signal_score(candles: List[Dict]) -> Dict:
     """
-    Calcule un score de signal sur 5
-    Retourne un dict avec le score, la direction et les détails
+    Calcule un score de signal enrichi avec contexte de trading avancé.
+    Retourne un dict avec score, direction, détails, ATR et qualité du trade.
     """
     if len(candles) < 60:
-        return {"score": 0, "direction": None, "details": {}, "pattern": "insufficient_data"}
+        return {"score": 0, "direction": None, "details": {}, "pattern": "insufficient_data", "atr_pips": 0.0}
 
     closes = [c["close"] for c in candles]
     highs = [c["high"] for c in candles]
@@ -142,24 +185,51 @@ def calculate_signal_score(candles: List[Dict]) -> Dict:
     current_price = closes[-1]
     prev_ma_fast = calculate_ma(closes[:-1], MA_FAST)
     prev_ma_slow = calculate_ma(closes[:-1], MA_SLOW)
+    momentum_5 = calculate_price_momentum(closes, 5)
+    momentum_20 = calculate_price_momentum(closes, 20)
+    trend_strength = calculate_trend_strength(closes, 20)
+    resistance, support = calculate_support_resistance(highs[:-1], lows[:-1], 20)
+    regime = detect_market_regime(current_price, atr, ma_fast, ma_slow)
+    pip_factor = 100 if current_price >= 20 else 10000
+    atr_pips = round(atr * pip_factor, 1)
 
-    # Détermine la direction
-    bullish_signals = 0
-    bearish_signals = 0
+    distance_to_resistance = max(0.0, (resistance - current_price) * pip_factor)
+    distance_to_support = max(0.0, (current_price - support) * pip_factor)
+    stop_hint = max(6.0, atr_pips)
+    rr_buy = round(distance_to_resistance / stop_hint, 2) if stop_hint else 0.0
+    rr_sell = round(distance_to_support / stop_hint, 2) if stop_hint else 0.0
+    breakout_up = len(highs) > 21 and current_price > max(highs[-21:-1])
+    breakout_down = len(lows) > 21 and current_price < min(lows[-21:-1])
+
+    bullish_signals = 0.0
+    bearish_signals = 0.0
     details = {
         "rsi": round(rsi, 2),
         "ma_fast": round(ma_fast, 5),
         "ma_slow": round(ma_slow, 5),
         "bb_upper": round(bb_upper, 5),
+        "bb_middle": round(bb_mid, 5),
         "bb_lower": round(bb_lower, 5),
         "atr": round(atr, 5),
+        "atr_pips": atr_pips,
         "macd": round(macd, 6),
         "macd_signal": round(macd_signal, 6),
         "candle_pattern": candle_pattern,
-        "price": round(current_price, 5)
+        "price": round(current_price, 5),
+        "momentum_5": round(momentum_5, 4),
+        "momentum_20": round(momentum_20, 4),
+        "trend_strength": round(trend_strength, 4),
+        "market_regime": regime,
+        "support": round(support, 5),
+        "resistance": round(resistance, 5),
+        "distance_to_support_pips": round(distance_to_support, 1),
+        "distance_to_resistance_pips": round(distance_to_resistance, 1),
+        "rr_buy": rr_buy,
+        "rr_sell": rr_sell,
+        "breakout_up": breakout_up,
+        "breakout_down": breakout_down,
     }
 
-    # RSI signal
     if rsi < RSI_OVERSOLD:
         bullish_signals += 1
         details["rsi_signal"] = "oversold → bullish"
@@ -167,19 +237,17 @@ def calculate_signal_score(candles: List[Dict]) -> Dict:
         bearish_signals += 1
         details["rsi_signal"] = "overbought → bearish"
 
-    # MA croisement
     if ma_fast > ma_slow and prev_ma_fast <= prev_ma_slow:
-        bullish_signals += 1
+        bullish_signals += 1.2
         details["ma_signal"] = "golden cross → bullish"
     elif ma_fast < ma_slow and prev_ma_fast >= prev_ma_slow:
-        bearish_signals += 1
+        bearish_signals += 1.2
         details["ma_signal"] = "death cross → bearish"
     elif ma_fast > ma_slow:
-        bullish_signals += 0.5
+        bullish_signals += 0.6
     else:
-        bearish_signals += 0.5
+        bearish_signals += 0.6
 
-    # Bollinger Bands
     if current_price <= bb_lower:
         bullish_signals += 1
         details["bb_signal"] = "below lower band → bullish"
@@ -187,7 +255,6 @@ def calculate_signal_score(candles: List[Dict]) -> Dict:
         bearish_signals += 1
         details["bb_signal"] = "above upper band → bearish"
 
-    # MACD
     if macd > macd_signal and macd > 0:
         bullish_signals += 1
         details["macd_signal_dir"] = "macd bullish"
@@ -195,7 +262,28 @@ def calculate_signal_score(candles: List[Dict]) -> Dict:
         bearish_signals += 1
         details["macd_signal_dir"] = "macd bearish"
 
-    # Pattern de chandeliers
+    if momentum_5 > 0.08 and momentum_20 > 0:
+        bullish_signals += 0.8
+        details["momentum_signal"] = "momentum bullish"
+    elif momentum_5 < -0.08 and momentum_20 < 0:
+        bearish_signals += 0.8
+        details["momentum_signal"] = "momentum bearish"
+
+    if trend_strength >= 0.12:
+        if regime == "trend_bullish":
+            bullish_signals += 0.8
+            details["trend_signal"] = "trend strength bullish"
+        elif regime == "trend_bearish":
+            bearish_signals += 0.8
+            details["trend_signal"] = "trend strength bearish"
+
+    if breakout_up:
+        bullish_signals += 1
+        details["breakout_signal"] = "breakout haussier"
+    elif breakout_down:
+        bearish_signals += 1
+        details["breakout_signal"] = "breakout baissier"
+
     if candle_pattern in ["hammer", "bullish_engulfing"]:
         bullish_signals += 1
         details["pattern_signal"] = f"{candle_pattern} → bullish"
@@ -203,24 +291,29 @@ def calculate_signal_score(candles: List[Dict]) -> Dict:
         bearish_signals += 1
         details["pattern_signal"] = f"{candle_pattern} → bearish"
 
-    # Score final
     if bullish_signals > bearish_signals:
-        score = min(5, int(bullish_signals))
+        score = min(5, int(round(bullish_signals)))
         direction = "BUY"
-        pattern = details.get("ma_signal", details.get("rsi_signal", "mixed_bullish"))
+        pattern = details.get("breakout_signal", details.get("ma_signal", details.get("rsi_signal", "advanced_bullish")))
+        rr = rr_buy
     elif bearish_signals > bullish_signals:
-        score = min(5, int(bearish_signals))
+        score = min(5, int(round(bearish_signals)))
         direction = "SELL"
-        pattern = details.get("ma_signal", details.get("rsi_signal", "mixed_bearish"))
+        pattern = details.get("breakout_signal", details.get("ma_signal", details.get("rsi_signal", "advanced_bearish")))
+        rr = rr_sell
     else:
         score = 0
         direction = None
         pattern = "neutral"
+        rr = max(rr_buy, rr_sell)
+
+    details["signal_bias"] = round(bullish_signals - bearish_signals, 2)
+    details["quality_score"] = round((score / 5) * min(1.5, max(rr, 0.5)), 2)
 
     return {
         "score": score,
         "direction": direction,
         "details": details,
         "pattern": pattern,
-        "atr_pips": round(atr * 10000, 1) if "JPY" not in str(details) else round(atr * 100, 1)
+        "atr_pips": atr_pips,
     }

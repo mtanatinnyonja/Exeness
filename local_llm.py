@@ -26,6 +26,7 @@ from runtime_db import RuntimeStore
 
 SYSTEM_PROMPT = """Tu es un analyste MT5 expert, précis et conservateur.
 Tu travailles uniquement avec des données locales MT5.
+Tu dois évaluer non seulement le setup, mais aussi la qualité du trade: tendance, momentum, régime de marché, support/résistance, spread, volatilité et ratio rendement/risque.
 Priorité absolue: préserver le capital, éviter les faux signaux, attendre quand le doute existe.
 Réponds uniquement en JSON strict.
 """
@@ -102,6 +103,44 @@ class LocalIntelligence:
             "insight": f"{instrument}: WAIT | {reason}",
             "risk_note": "llm_only_mode",
         }
+
+    def _technical_fallback_decision(self, instrument: str, signal: Dict, reason: str) -> Dict:
+        details = signal.get("details", {}) or {}
+        direction = signal.get("direction")
+        score = int(signal.get("score", 0) or 0)
+        atr_pips = max(6, int(round(float(signal.get("atr_pips", 12) or 12))))
+        regime = str(details.get("market_regime", "unknown"))
+        bias = float(details.get("signal_bias", 0) or 0)
+        rr_buy = float(details.get("rr_buy", 0) or 0)
+        rr_sell = float(details.get("rr_sell", 0) or 0)
+        rr = rr_buy if direction == "BUY" else rr_sell if direction == "SELL" else 0.0
+
+        trend_ok = (
+            (direction == "BUY" and regime == "trend_bullish") or
+            (direction == "SELL" and regime == "trend_bearish") or
+            regime == "volatile"
+        )
+        bias_ok = abs(bias) >= 1.0
+        rr_ok = rr >= 1.2
+        score_ok = score >= MIN_SIGNAL_SCORE
+
+        if direction in {"BUY", "SELL"} and trend_ok and bias_ok and rr_ok and score_ok:
+            confidence = min(0.82, round(0.52 + (score * 0.05) + min(0.1, abs(bias) * 0.03), 2))
+            tp_pips = max(atr_pips * 2, int(round(atr_pips * max(1.6, min(3.0, rr)))))
+            return {
+                "decision": direction,
+                "confidence": confidence,
+                "stop_loss_pips": atr_pips,
+                "take_profit_pips": tp_pips,
+                "reasoning": f"Fallback technique actif: score={score}/5, regime={regime}, bias={bias:.2f}, RR={rr:.2f}.",
+                "insight": f"{instrument}: {direction} via fallback technique avancé",
+                "risk_note": "technical_fallback",
+            }
+
+        return self._safe_wait(
+            instrument,
+            f"Fallback prudent: score={score}/5, regime={regime}, bias={bias:.2f}, RR={rr:.2f}. {reason}"
+        )
 
     def _coerce_json_result(self, raw_text: str) -> Optional[Dict]:
         text = (raw_text or "").strip()
@@ -212,8 +251,9 @@ Réponse attendue uniquement en JSON:
             result = self._call_ollama(prompt, today_pnl, instrument)
 
         if result is None:
-            result = self._safe_wait(
+            result = self._technical_fallback_decision(
                 instrument,
+                signal,
                 f"LLM Ollama indisponible. Installe ou démarre Ollama avec le modèle {self.local_llm_model}."
             )
 

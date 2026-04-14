@@ -128,6 +128,9 @@ class TradeOrchestrator:
             signal_m15 = calculate_signal_score(candles_m15)
             score = signal_h1["score"]
             direction = signal_h1["direction"]
+            details = signal_h1.get("details", {})
+            regime = details.get("market_regime", "unknown")
+            trend_strength = float(details.get("trend_strength", 0) or 0)
 
             if signal_h1["direction"] == signal_m15["direction"] and signal_m15["score"] >= 2:
                 score += 1
@@ -135,6 +138,10 @@ class TradeOrchestrator:
             else:
                 self.memory.log_session(f"📊 {instrument}: score H1={score}/5 | direction={direction}")
 
+            self.memory.log_session(
+                f"🧮 {instrument}: regime={regime} | trend={trend_strength:.3f} | "
+                f"RR buy={details.get('rr_buy', 0)} | RR sell={details.get('rr_sell', 0)}"
+            )
             learning = self.memory.assess_setup(instrument, signal_h1)
             if learning["reasons"]:
                 self.memory.log_session(f"🧠 {instrument}: mémoire → {', '.join(learning['reasons'])}")
@@ -147,13 +154,28 @@ class TradeOrchestrator:
                 self.memory.log_session(f"⚠️ {instrument}: spread trop large ({spread:.1f} pips)")
                 return
 
+            rr_buy = float(details.get("rr_buy", 0) or 0)
+            rr_sell = float(details.get("rr_sell", 0) or 0)
+            chosen_rr = rr_buy if direction == "BUY" else rr_sell if direction == "SELL" else max(rr_buy, rr_sell)
+            if direction in {"BUY", "SELL"} and chosen_rr < 1.2:
+                self.memory.log_session(f"🛡️ {instrument}: trade ignoré, risk/reward trop faible ({chosen_rr:.2f})")
+                return
+
+            if regime == "range" and score < (MIN_SIGNAL_SCORE + 1):
+                self.memory.log_session(f"🛡️ {instrument}: marché trop neutre pour un trade avancé")
+                return
+
             self.last_signal_time[instrument] = datetime.utcnow()
             market_ctx = (
                 f"Spread actuel: {spread:.1f} pips. Heure UTC: {datetime.utcnow().hour}h. "
                 f"Broker: {getattr(self.broker, 'name', 'unknown')}. "
-                f"Score technique brut: {score}/5. Direction brute: {direction or 'WAIT'}"
+                f"Score technique brut: {score}/5. Direction brute: {direction or 'WAIT'}. "
+                f"Régime: {regime}. Trend strength: {trend_strength:.3f}. "
+                f"Momentum5={details.get('momentum_5', 0)}%. Momentum20={details.get('momentum_20', 0)}%. "
+                f"Support distance={details.get('distance_to_support_pips', 0)} pips. "
+                f"Resistance distance={details.get('distance_to_resistance_pips', 0)} pips. "
+                f"RiskReward buy={rr_buy:.2f}, sell={rr_sell:.2f}."
             )
-
             decision = self.intelligence.analyze_signal(instrument, signal_h1, account, market_ctx)
             if score < MIN_SIGNAL_SCORE or direction is None:
                 self.memory.log_session(f"🧪 {instrument}: signal faible envoyé au LLM pour validation finale")
