@@ -772,15 +772,24 @@ function getFocusedPair() {
   return (sel?.value || currentFocusPair || '').trim();
 }
 
-function syncFocusPairs(symbols) {
+function syncFocusPairs(symbols, preferredList = []) {
   const sel = document.getElementById('focus-pair-select');
   if (!sel) return;
-  const list = (symbols || []).filter(Boolean);
-  const typed = ((document.getElementById('setting-preferred-symbols')?.value || '').split(',')[0] || '').trim();
+  const fromField = ((document.getElementById('setting-preferred-symbols')?.value || '').split(',')[0] || '').trim();
+  const fromSettings = Array.isArray(preferredList) && preferredList.length ? String(preferredList[0] || '').trim() : '';
+  const rawTyped = fromField || fromSettings;
+  const typed = rawTyped ? rawTyped.replace(/\s+/g, '') : '';
+  const list = [];
+
+  if (typed) list.push(typed);
+  (symbols || []).filter(Boolean).forEach(s => {
+    if (!list.includes(s)) list.push(s);
+  });
+
   const wanted = currentFocusPair || typed || list[0] || '';
   sel.innerHTML = list.map(s => '<option value="' + s + '">' + s + '</option>').join('');
-  sel.value = list.includes(wanted) ? wanted : (typed && !list.includes(typed) ? (list[0] || '') : (list[0] || ''));
-  currentFocusPair = typed || sel.value || '';
+  sel.value = list.includes(wanted) ? wanted : (typed || list[0] || '');
+  currentFocusPair = sel.value || typed || '';
 }
 
 function renderPairSnapshot(result) {
@@ -947,8 +956,8 @@ async function fetchStatus() {
     document.getElementById('symbol-mode').textContent = data.settings?.symbol_source_mode || '—';
     document.getElementById('ai-provider').textContent = data.ai_provider || '—';
     document.getElementById('active-symbols').textContent = (data.active_symbols || []).join(', ') || '—';
-    syncFocusPairs(data.active_symbols || []);
     populateSettings(data);
+    syncFocusPairs(data.active_symbols || [], data.settings?.preferred_symbols || []);
     renderAiChart(data);
     if (lastAiPayload) {
       renderAiDecision(lastAiPayload);
