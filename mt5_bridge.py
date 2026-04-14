@@ -203,7 +203,24 @@ class MT5Broker:
         visible = self.list_visible_symbols()
         max_symbols = int(settings.get("max_symbols_per_cycle", MT5_MAX_VISIBLE_SYMBOLS))
 
-        source = positions + visible
+        preferred_raw = fallback or settings.get("preferred_symbols", PREFERRED_SYMBOLS) or []
+        preferred = []
+        for raw in preferred_raw:
+            if not raw:
+                continue
+            raw_str = str(raw).strip()
+            candidates = [raw_str, raw_str.replace("_", ""), raw_str.upper(), raw_str.lower()]
+            matched = None
+            for candidate in candidates:
+                for name in visible + positions:
+                    if str(name).upper() == candidate.upper():
+                        matched = name
+                        break
+                if matched:
+                    break
+            preferred.append(matched or raw_str)
+
+        source = preferred + positions + visible
         ordered = []
         for name in source:
             if name and name not in ordered:
