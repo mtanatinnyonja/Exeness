@@ -171,20 +171,21 @@ class TradeOrchestrator:
 
     def get_target_instruments(self) -> List[str]:
         settings = self.store.get_settings()
-        preferred = settings.get("preferred_symbols", INSTRUMENTS) or INSTRUMENTS
-        mode = settings.get("symbol_source_mode", "preferred")
+        max_symbols = int(settings.get("max_symbols_per_cycle", 10))
 
-        if mode == "preferred":
-            return list(preferred)
-
-        # mode "visible": ne garder que les symboles préférés qui sont actifs dans MT5
+        # Mode dynamique: prendre tous les symboles visibles dans MT5 Market Watch
+        visible = []
         try:
             if hasattr(self.broker, "list_visible_symbols"):
-                visible = [s.upper() for s in self.broker.list_visible_symbols()]
-                return [s for s in preferred if s.upper() in visible]
+                visible = self.broker.list_visible_symbols()
         except Exception as e:
             self.memory.record_error("symbols", str(e))
-        return list(preferred)
+
+        if not visible:
+            # Fallback: INSTRUMENTS statique si MT5 ne retourne rien
+            return list(INSTRUMENTS)[:max_symbols]
+
+        return visible[:max_symbols]
 
     def run_cycle(self):
         self.memory.log_session("═══ Cycle démarré ═══")
@@ -584,6 +585,3 @@ class TradeOrchestrator:
                 float(runtime_settings.get("daily_target", DAILY_TARGET))
             ).get("active", False),
         }
-
-
-TradingAgent = TradeOrchestrator

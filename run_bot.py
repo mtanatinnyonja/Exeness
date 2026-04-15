@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from trade_orchestrator import TradeOrchestrator
 from mt5_bridge import build_broker
 from signal_engine import calculate_signal_score
-from settings import CHECK_INTERVAL_MINUTES, INSTRUMENTS, MIN_SIGNAL_SCORE
+from settings import CHECK_INTERVAL_MINUTES, MIN_SIGNAL_SCORE
 from runtime_db import RuntimeStore
 
 
@@ -94,9 +94,9 @@ def show_settings():
     broker = build_broker()
     payload = RuntimeStore().get_settings()
     payload["broker"] = getattr(broker, "name", "unknown")
-    if hasattr(broker, "get_active_symbols"):
+    if hasattr(broker, "list_visible_symbols"):
         try:
-            payload["active_symbols_now"] = broker.get_active_symbols(INSTRUMENTS)
+            payload["active_symbols_now"] = broker.list_visible_symbols()
         except Exception as e:
             payload["active_symbols_error"] = str(e)
     print(json.dumps(payload, indent=2, ensure_ascii=False))
@@ -106,7 +106,15 @@ def run_backtest():
     print("🔬 Backtest local en cours...\n")
     broker = build_broker()
 
-    for instrument in INSTRUMENTS:
+    # Dynamique: utilise les symboles visibles dans MT5
+    instruments = []
+    if hasattr(broker, "list_visible_symbols"):
+        instruments = broker.list_visible_symbols()
+    if not instruments:
+        print("⚠️ Aucun symbole visible dans MT5 pour le backtest")
+        return
+
+    for instrument in instruments:
         print(f"=== {instrument} ===")
         try:
             candles = broker.get_candles(instrument, "H1", 300)

@@ -277,6 +277,3 @@ JSON uniquement:
             f"Provider={self.provider} | LLM calls={self.memory.get_llm_calls_today()} | "
             f"Tokens={token_usage['prompt_tokens'] + token_usage['completion_tokens']}/{self.daily_token_budget}"
         )
-
-
-ClaudeAnalyst = LocalIntelligence

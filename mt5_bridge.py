@@ -10,8 +10,8 @@ from typing import Dict, List, Optional, Tuple
 from settings import (
     BROKER, INITIAL_CAPITAL, MT5_TERMINAL_PATH, MT5_LOGIN, MT5_PASSWORD,
     MT5_SERVER, REQUIRE_DEMO_ACCOUNT, ALLOW_TRADE_EXECUTION,
-    MT5_MAGIC_NUMBER, MT5_DEVIATION, MT5_USE_VISIBLE_SYMBOLS,
-    MT5_MAX_VISIBLE_SYMBOLS, INSTRUMENTS, SYMBOL_SOURCE_MODE, PREFERRED_SYMBOLS,
+    MT5_MAGIC_NUMBER, MT5_DEVIATION,
+    MT5_MAX_VISIBLE_SYMBOLS, PREFERRED_SYMBOLS,
 )
 from runtime_db import RuntimeStore
 
@@ -510,9 +510,6 @@ class MT5Broker:
                 raise RuntimeError(f"close_position échoué: {err}")
 
         return total_profit
-
-
-DemoBroker = PaperBroker
 
 
 def build_broker():

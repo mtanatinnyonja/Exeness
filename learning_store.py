@@ -83,12 +83,6 @@ class AgentMemory:
             return 0
         return int(self.memory.get("llm_calls_today", 0))
 
-    def increment_api_calls(self) -> int:
-        return self.increment_llm_calls()
-
-    def get_api_calls_today(self) -> int:
-        return self.get_llm_calls_today()
-
     def record_token_usage(self, prompt_tokens: int = 0, completion_tokens: int = 0):
         today = datetime.utcnow().strftime("%Y-%m-%d")
         usage = self.memory.setdefault("token_usage", {"date": today, "prompt_tokens": 0, "completion_tokens": 0})
@@ -283,18 +277,12 @@ Derniers trades:
 {json.dumps(recent, indent=2, ensure_ascii=False) if recent else 'Aucun trade encore'}
 """
 
-    def get_context_for_claude(self) -> str:
-        return self.get_context_for_llm()
-
     def add_ai_insight(self, insight: str):
         self.memory.setdefault("last_ai_insights", []).append(
             f"[{datetime.utcnow().strftime('%Y-%m-%d %H:%M')}] {insight}"
         )
         self.memory["last_ai_insights"] = self.memory["last_ai_insights"][-20:]
         self.save()
-
-    def add_claude_insight(self, insight: str):
-        self.add_ai_insight(insight)
 
     def log_session(self, message: str):
         entry = f"[{datetime.utcnow().strftime('%H:%M:%S')}] {message}"

@@ -432,7 +432,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
         <div class="kpi-value accent" id="ai-provider" style="font-size:16px;">—</div>
       </div>
       <div>
-        <div class="kpi-label">Paires suivies</div>
+        <div class="kpi-label">Symboles MT5 visibles</div>
         <div class="refresh-info" id="active-symbols" style="white-space:normal;line-height:1.6;">—</div>
       </div>
       <div>
@@ -463,8 +463,8 @@ HTML_PAGE = r"""<!DOCTYPE html>
           </select>
         </div>
         <div class="field">
-          <label>Symbole test IA</label>
-          <input id="setting-preferred-symbols" placeholder="laisser vide = 1er symbole visible MT5" />
+          <label>Filtre symboles (vide = tous)</label>
+          <input id="setting-preferred-symbols" placeholder="vide = tous les symboles MT5 visibles" />
         </div>
         <div class="field">
           <label>Max symboles</label>
@@ -492,7 +492,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
         </div>
         <div class="field">
           <label>Modèle local</label>
-          <input id="setting-local-model" placeholder="llama3.2:3b" />
+          <input id="setting-local-model" placeholder="qwen2.5:3b" />
         </div>
         <div class="field">
           <label>Endpoint local</label>
@@ -716,7 +716,7 @@ function populateSettings(data) {
   document.getElementById('setting-daily-target').value = settings.daily_target ?? 2.0;
   document.getElementById('setting-daily-loss').value = settings.daily_loss_limit ?? -5.0;
   document.getElementById('setting-max-positions').value = settings.max_open_positions || 2;
-  document.getElementById('setting-local-model').value = settings.local_llm_model || 'llama3.2:3b';
+  document.getElementById('setting-local-model').value = settings.local_llm_model || 'qwen2.5:3b';
   document.getElementById('setting-local-endpoint').value = settings.local_llm_endpoint || 'http://127.0.0.1:11434/api/generate';
   document.getElementById('setting-local-timeout').value = settings.local_llm_timeout ?? 120;
   document.getElementById('setting-analysis-mode').value = settings.llm_analysis_mode || 'precision';
@@ -802,8 +802,7 @@ function syncFocusPairs(symbols, preferredList = []) {
   });
 
   const list = Array.from(unique.values());
-  const forceSingle = true;
-  const finalList = forceSingle && list.length ? [list[0]] : list;
+  const finalList = list;
   const wanted = currentFocusPair || matchedPreferred || finalList[0] || '';
 
   sel.innerHTML = finalList.map(s => '<option value="' + s + '">' + s + '</option>').join('');
@@ -944,7 +943,7 @@ async function testAI() {
   const focused = getFocusedPair();
   const typed = (document.getElementById('setting-preferred-symbols').value || '').split(',')[0]?.trim();
   const visible = (document.getElementById('active-symbols').textContent || '').split(',')[0]?.trim();
-  const symbol = focused || typed || visible || 'XAUUSDm';
+  const symbol = focused || typed || visible || '';
   try {
     const res = await fetch('/api/test-ai', {
       method: 'POST',

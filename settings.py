@@ -22,9 +22,8 @@ MT5_DEVIATION = 20
 # === SÉLECTION DES SYMBOLES ===
 # visible uniquement = seulement les symboles affichés dans MT5
 SYMBOL_SOURCE_MODE = os.getenv("SYMBOL_SOURCE_MODE", "visible").strip().lower()
-PREFERRED_SYMBOLS = [s.strip() for s in os.getenv("PREFERRED_SYMBOLS", "XAUUSDm").split(",") if s.strip()]
-MT5_USE_VISIBLE_SYMBOLS = True
-MT5_MAX_VISIBLE_SYMBOLS = int(os.getenv("MAX_SYMBOLS_PER_CYCLE", "3"))
+PREFERRED_SYMBOLS = [s.strip() for s in os.getenv("PREFERRED_SYMBOLS", "").split(",") if s.strip()]
+MT5_MAX_VISIBLE_SYMBOLS = int(os.getenv("MAX_SYMBOLS_PER_CYCLE", "10"))
 AUTONOMOUS_MODE = True
 DASHBOARD_PORT = int(os.getenv("DASHBOARD_PORT", "8080"))
 
@@ -55,9 +54,8 @@ MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "2"))
 POSITION_SIZE_USD = 1.0
 
 # === INSTRUMENTS ===
-INSTRUMENTS = [
-    "XAUUSDm",
-]
+# Vide = dynamique, prend tous les symboles visibles dans MT5 Market Watch
+INSTRUMENTS = []
 
 # === TIMEFRAMES ===
 PRIMARY_TIMEFRAME = "M15"
