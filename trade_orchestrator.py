@@ -172,8 +172,8 @@ class TradeOrchestrator:
     def get_target_instruments(self) -> List[str]:
         settings = self.store.get_settings()
         max_symbols = int(settings.get("max_symbols_per_cycle", 10))
+        preferred = settings.get("preferred_symbols") or []
 
-        # Mode dynamique: prendre tous les symboles visibles dans MT5 Market Watch
         visible = []
         try:
             if hasattr(self.broker, "list_visible_symbols"):
@@ -182,8 +182,15 @@ class TradeOrchestrator:
             self.memory.record_error("symbols", str(e))
 
         if not visible:
-            # Fallback: INSTRUMENTS statique si MT5 ne retourne rien
             return list(INSTRUMENTS)[:max_symbols]
+
+        # Si preferred_symbols est défini → trader uniquement ceux-là
+        # (l'utilisateur y met les paires qu'il a en graphique dans MT5)
+        if preferred:
+            filtered = [s for s in visible if any(
+                s.upper() == p.upper() for p in preferred
+            )]
+            return filtered[:max_symbols] if filtered else visible[:max_symbols]
 
         return visible[:max_symbols]
 
