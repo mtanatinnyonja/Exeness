@@ -385,6 +385,9 @@ class MT5Broker:
                 "units": getattr(pos, "volume", 0.0),
                 "unrealized_pnl": float(getattr(pos, "profit", 0.0)),
                 "avg_price": float(getattr(pos, "price_open", 0.0)),
+                "sl": float(getattr(pos, "sl", 0.0) or 0.0),
+                "tp": float(getattr(pos, "tp", 0.0) or 0.0),
+                "price_current": float(getattr(pos, "price_current", 0.0) or 0.0),
             })
         return positions
 

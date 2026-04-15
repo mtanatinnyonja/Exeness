@@ -1074,15 +1074,26 @@ async function fetchStatus() {
     if (positions.length === 0) {
       posEl.innerHTML = '<div style="color:var(--muted);font-size:12px;text-align:center;padding:12px 0">Aucune position</div>';
     } else {
-      posEl.innerHTML = positions.map(p => `
-        <div class="position-item">
-          <div>
-            <div class="pos-instrument">${p.instrument}</div>
-            <div style="margin-top:2px"><span class="pos-dir ${p.direction.toLowerCase()}">${p.direction}</span></div>
+      posEl.innerHTML = positions.map(p => {
+        const sl = p.sl ? p.sl.toFixed(2) : '—';
+        const tp = p.tp ? p.tp.toFixed(2) : '—';
+        const cur = p.price_current ? p.price_current.toFixed(2) : '—';
+        return `
+        <div class="position-item" style="flex-direction:column;align-items:stretch;gap:6px">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div>
+              <div class="pos-instrument">${p.instrument}</div>
+              <div style="margin-top:2px"><span class="pos-dir ${p.direction.toLowerCase()}">${p.direction}</span> <span style="color:var(--muted);font-size:11px;font-family:var(--mono)">@ ${(p.avg_price||0).toFixed(2)}</span></div>
+            </div>
+            <div class="pos-pnl">${fmtPnl(p.unrealized_pnl)}</div>
           </div>
-          <div class="pos-pnl">${fmtPnl(p.unrealized_pnl)}</div>
-        </div>
-      `).join('');
+          <div style="display:flex;gap:12px;font-family:var(--mono);font-size:11px;color:var(--muted)">
+            <span>Prix: <span style="color:var(--text)">${cur}</span></span>
+            <span>SL: <span style="color:var(--red)">${sl}</span></span>
+            <span>TP: <span style="color:var(--green)">${tp}</span></span>
+          </div>
+        </div>`;
+      }).join('');
     }
 
     // Patterns
