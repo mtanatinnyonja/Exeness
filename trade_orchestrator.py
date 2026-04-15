@@ -68,7 +68,7 @@ class TradeOrchestrator:
         return 3.0
 
     def _min_rr_required(self, instrument: str) -> float:
-        return 1.1 if str(instrument).upper().startswith("XAU") else 1.2
+        return 1.0 if str(instrument).upper().startswith("XAU") else 1.0
 
     def _should_use_full_llm(self, instrument: str, signal: Dict, spread: float, chosen_rr: float, min_signal_required: int) -> bool:
         """
@@ -97,28 +97,6 @@ class TradeOrchestrator:
             or regime in ("trend_bullish", "trend_bearish")
         )
         return quality_ok
-
-    def _build_profit_boost_profile(self, today_pnl: float, daily_target: float) -> Dict:
-        """
-        Mode accélération: augmente les opportunités AVANT d'atteindre l'objectif journalier.
-        Garde-fous inchangés (spread, RR, filtre ML, limite perte).
-        """
-        base_floor = int(MIN_SIGNAL_SCORE)
-        if daily_target <= 0 or today_pnl >= daily_target:
-            return {
-                "active": False,
-                "gap": 0.0,
-                "signal_floor": base_floor,
-                "expand_symbols": False,
-            }
-
-        gap = float(max(0.0, daily_target - today_pnl))
-        return {
-            "active": True,
-            "gap": gap,
-            "signal_floor": max(2, base_floor - 1),
-            "expand_symbols": True,
-        }
 
     def _build_live_snapshot(self, instrument: str) -> Dict:
         candles_live = self.broker.get_candles(instrument, "M1", 60)
@@ -218,7 +196,6 @@ class TradeOrchestrator:
         settings = self.store.get_settings()
         max_open_positions = int(settings.get("max_open_positions", MAX_OPEN_POSITIONS))
         daily_loss_limit = float(settings.get("daily_loss_limit", DAILY_LOSS_LIMIT))
-        daily_target = float(settings.get("daily_target", DAILY_TARGET))
 
         if len(open_positions) >= max_open_positions:
             self.memory.log_session(f"⚠️ Max positions atteint ({max_open_positions})")
@@ -230,12 +207,11 @@ class TradeOrchestrator:
             self.memory.log_session(f"🛑 Perte journalière limite atteinte: ${today_pnl:.2f}")
             self._close_all_positions(open_positions, "limite de perte journalière")
             return
-        if daily_target > 0 and today_pnl >= daily_target:
-            self.memory.log_session(f"🎯 Objectif journalier atteint: ${today_pnl:.2f}")
-            self._close_all_positions(open_positions, "objectif journalier atteint")
-            return
+        # Pas d'objectif journalier fixe: on trade tant que le money management est respecté
+        if today_pnl > 0:
+            self.memory.log_session(f"📈 P&L jour: +${today_pnl:.2f} — on continue")
 
-        boost = self._build_profit_boost_profile(today_pnl, daily_target)
+        signal_floor = max(2, int(MIN_SIGNAL_SCORE) - 1) if today_pnl < 0 else max(2, int(MIN_SIGNAL_SCORE) - 1)
 
         instruments = self.get_target_instruments()
 
@@ -243,14 +219,10 @@ class TradeOrchestrator:
             self.memory.log_session("⚠️ Aucun symbole visible dans MT5 - rien à analyser")
             return
 
-        self.memory.log_session(f"📡 Symboles actifs: {', '.join(instruments)}")
-        if boost.get("active"):
-            self.memory.log_session(
-                f"🎯 Mode objectif actif: reste ${boost.get('gap', 0):.2f} | seuil signal={boost.get('signal_floor', MIN_SIGNAL_SCORE)}/5"
-            )
+        self.memory.log_session(f"📡 Symboles actifs: {', '.join(instruments)} | seuil signal={signal_floor}/5")
 
         for instrument in instruments:
-            self._analyze_instrument(instrument, account, min_signal_required=int(boost.get("signal_floor", MIN_SIGNAL_SCORE)))
+            self._analyze_instrument(instrument, account, min_signal_required=signal_floor)
             time.sleep(0.2)
 
         self.memory.log_session("═══ Cycle terminé ═══")
@@ -323,8 +295,8 @@ class TradeOrchestrator:
                 f"samples={ml_eval.get('sample_count', 0)} | source={ml_eval.get('source', 'n/a')}"
             )
             signal_h1['ml_probability'] = ml_eval.get('probability', 0)
-            if ml_eval.get('trained') and float(ml_eval.get('probability', 0) or 0) < 0.46:
-                self.memory.log_session(f"🛡️ {instrument}: ML bloque le trade, proba de réussite trop faible")
+            if ml_eval.get('trained') and float(ml_eval.get('probability', 0) or 0) < 0.35:
+                self.memory.log_session(f"🛡️ {instrument}: ML bloque le trade, proba trop faible ({ml_eval.get('probability', 0):.2f})")
                 return
 
             self.last_signal_time[instrument] = datetime.utcnow()
@@ -352,17 +324,12 @@ class TradeOrchestrator:
             if not decision:
                 return
 
-            # Garde-fous d'exécution (après décision IA):
-            # on laisse l'analyse se faire mais on empêche l'ordre si le contexte reste trop faible.
+            # Garde-fou RR: réduit le risque au lieu de bloquer complètement
             if decision.get("decision") in ["BUY", "SELL"] and low_rr_guard:
+                decision["risk_multiplier"] = round(decision.get("risk_multiplier", 1.0) * 0.6, 2)
                 self.memory.log_session(
-                    f"🛡️ {instrument}: ordre bloqué, RR insuffisant ({chosen_rr:.2f} < {min_rr:.2f})"
+                    f"⚠️ {instrument}: RR faible ({chosen_rr:.2f} < {min_rr:.2f}) → risque réduit ×0.6"
                 )
-                decision = {
-                    **decision,
-                    "decision": "WAIT",
-                    "reasoning": f"RR insuffisant ({chosen_rr:.2f} < {min_rr:.2f})",
-                }
 
             if regime == "range" and score < min_signal_required and decision.get("decision") in ["BUY", "SELL"]:
                 self.memory.log_session(
@@ -395,7 +362,9 @@ class TradeOrchestrator:
 
     def _execute_trade(self, instrument: str, decision: Dict, signal: Dict, account: Dict):
         direction = decision["decision"]
-        sl_pips = max(1, int(decision.get("stop_loss_pips", 20) or signal.get("atr_pips", 20) or 20))
+        atr = max(6, int(round(float(signal.get("atr_pips", 20) or 20))))
+        raw_sl = int(decision.get("stop_loss_pips", atr) or atr)
+        sl_pips = max(atr, raw_sl)  # Jamais en dessous de l'ATR
         tp_pips = max(sl_pips, int(decision.get("take_profit_pips", sl_pips * 2) or sl_pips * 2))
         confidence = float(decision.get("confidence", 0.5))
         risk_multiplier = float(decision.get("risk_multiplier", 1.0))
@@ -586,9 +555,4 @@ class TradeOrchestrator:
             "ml_history": ml_history,
             "learned_filters": self.memory.memory.get("learned_filters", [])[-5:],
             "runtime_mode": "local-only",
-            "profit_target_enabled": float(runtime_settings.get("daily_target", DAILY_TARGET)) > 0,
-            "profit_boost_active": self._build_profit_boost_profile(
-                self.memory.get_daily_pnl(),
-                float(runtime_settings.get("daily_target", DAILY_TARGET))
-            ).get("active", False),
         }
