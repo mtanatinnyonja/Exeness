@@ -124,7 +124,7 @@ def run_backtest():
             buys = 0
             sells = 0
             for i in range(60, len(candles) - 20):
-                sig = calculate_signal_score(candles[:i])
+                sig = calculate_signal_score(candles[:i], instrument)
                 if sig["score"] >= MIN_SIGNAL_SCORE and sig["direction"]:
                     signals += 1
                     if sig["direction"] == "BUY":

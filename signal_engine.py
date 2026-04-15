@@ -314,7 +314,19 @@ def build_human_analysis_summary(
 _MIN_CANDLES = max(RSI_PERIOD * 2 + 1, 34, MA_SLOW, 60)
 
 
-def calculate_signal_score(candles: List[Dict]) -> Dict:
+def _pip_factor_for(current_price: float, instrument: str = "") -> float:
+    """Return the pip factor consistent with mt5_bridge._pip_size."""
+    name = str(instrument).upper()
+    if name.startswith(("BTC", "ETH")):
+        return 1.0        # BTC pip = 1.0 ($1)
+    if name.startswith(("XAU", "XAG")):
+        return 10.0       # XAU pip = 0.10
+    if current_price >= 1000:
+        return 10.0
+    return 10000.0 if current_price < 20 else 100.0
+
+
+def calculate_signal_score(candles: List[Dict], instrument: str = "") -> Dict:
     """
     Calcule un score de signal enrichi avec contexte de trading avancé.
     Retourne un dict avec score, direction, détails, ATR et qualité du trade.
@@ -352,7 +364,7 @@ def calculate_signal_score(candles: List[Dict]) -> Dict:
     resistance, support = calculate_support_resistance(highs[:-1], lows[:-1], window=40)
 
     regime = detect_market_regime(current_price, atr, ma_fast, ma_slow)
-    pip_factor = 100 if current_price >= 20 else 10000
+    pip_factor = _pip_factor_for(current_price, instrument)
     atr_pips = round(atr * pip_factor, 1)
 
     distance_to_resistance = max(0.0, (resistance - current_price) * pip_factor)

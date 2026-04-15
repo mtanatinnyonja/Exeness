@@ -68,7 +68,7 @@ class PaperBroker:
     def _pip_size(self, instrument: str) -> float:
         name = str(instrument).upper()
         if name.startswith(("XAU", "XAG")):
-            return 0.01
+            return 0.10
         if name.startswith(("BTC", "ETH")):
             return 1.0
         if "JPY" in name:
@@ -233,7 +233,7 @@ class MT5Broker:
         digits = int(getattr(info, "digits", 5) or 5)
         name = str(symbol).upper()
         if name.startswith(("XAU", "XAG")):
-            return max(point * 10, 0.01)
+            return max(point * 10, 0.10)
         if name.startswith(("BTC", "ETH")):
             return max(point * 100, 1.0)
         return point * 10 if digits in {3, 5} else point

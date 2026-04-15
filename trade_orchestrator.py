@@ -101,7 +101,7 @@ class TradeOrchestrator:
     def _build_live_snapshot(self, instrument: str) -> Dict:
         candles_live = self.broker.get_candles(instrument, "M1", 60)
         candles_h1 = self.broker.get_candles(instrument, PRIMARY_TIMEFRAME, 120)
-        signal = calculate_signal_score(candles_h1)
+        signal = calculate_signal_score(candles_h1, instrument)
         details = signal.get("details", {}) or {}
 
         bid, ask = self.broker.get_current_price(instrument)
@@ -247,8 +247,8 @@ class TradeOrchestrator:
                 self.memory.log_session(f"⚠️ {instrument}: données M15 insuffisantes")
                 return
 
-            signal_h1 = calculate_signal_score(candles_h1)
-            signal_m15 = calculate_signal_score(candles_m15)
+            signal_h1 = calculate_signal_score(candles_h1, instrument)
+            signal_m15 = calculate_signal_score(candles_m15, instrument)
             score = signal_h1["score"]
             direction = signal_h1["direction"]
             details = signal_h1.get("details", {})
@@ -478,7 +478,7 @@ class TradeOrchestrator:
         account = self.broker.get_account_summary()
         candles_needed = max(120, _MIN_CANDLES + 10)
         candles = self.broker.get_candles(target, PRIMARY_TIMEFRAME, candles_needed)
-        signal = calculate_signal_score(candles)
+        signal = calculate_signal_score(candles, target)
 
         spread = self.broker.get_spread_pips(target)
         context = f"Mode test dashboard. Spread actuel: {spread:.1f} pips."
