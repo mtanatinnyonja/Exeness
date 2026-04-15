@@ -24,12 +24,7 @@ from settings import (
 from runtime_db import RuntimeStore
 
 
-SYSTEM_PROMPT = """Tu es un analyste MT5 expert, précis et conservateur.
-Tu travailles uniquement avec des données locales MT5.
-Tu dois évaluer non seulement le setup, mais aussi la qualité du trade: tendance, momentum, régime de marché, support/résistance, spread, volatilité et ratio rendement/risque.
-Priorité absolue: préserver le capital, éviter les faux signaux, attendre quand le doute existe.
-Réponds uniquement en JSON strict.
-"""
+SYSTEM_PROMPT = """Tu es un analyste MT5 conservateur. Évalue le setup et réponds BUY, SELL ou WAIT en JSON strict. Priorité: préserver le capital."""
 
 
 class LocalIntelligence:
@@ -93,9 +88,19 @@ class LocalIntelligence:
         match = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*pips", market_context or "")
         return float(match.group(1)) if match else 0.0
 
-    def _compact_memory_context(self, raw_text: str, limit: int = 1200) -> str:
+    def _compact_memory_context(self, raw_text: str, limit: int = 400) -> str:
         compact = " ".join(str(raw_text or "").split())
         return compact[:limit]
+
+    def _compact_details(self, details: Dict) -> Dict:
+        """Keep only essential fields for LLM prompt to reduce token count."""
+        keys = [
+            "market_regime", "signal_bias", "rr_buy", "rr_sell",
+            "rsi_14", "macd_signal", "bb_position",
+            "momentum_5", "momentum_20",
+            "distance_to_support_pips", "distance_to_resistance_pips",
+        ]
+        return {k: details[k] for k in keys if k in details}
 
     def _safe_wait(self, instrument: str, reason: str) -> Dict:
         return {
@@ -160,7 +165,19 @@ class LocalIntelligence:
             try:
                 return json.loads(text[start:end + 1])
             except Exception:
-                return None
+                pass
+        # Repair truncated JSON: close open strings and braces
+        if start != -1:
+            fragment = text[start:]
+            # Close any open string
+            if fragment.count('"') % 2 == 1:
+                fragment += '"'
+            # Close open braces
+            fragment += "}"
+            try:
+                return json.loads(fragment)
+            except Exception:
+                pass
         return None
 
     def _call_ollama(self, prompt: str, today_pnl: float, instrument: str) -> Optional[Dict]:
@@ -185,11 +202,11 @@ class LocalIntelligence:
                     "model": self.local_llm_model,
                     "prompt": SYSTEM_PROMPT + "\n\n" + prompt,
                     "stream": False,
-                    "format": "json",
                     "options": {
                         "temperature": self.llm_temperature,
-                        "num_predict": 160,
+                        "num_predict": 250,
                     },
+                    "keep_alive": "10m",
                 },
                 timeout=self.local_llm_timeout,
             )
@@ -219,36 +236,17 @@ class LocalIntelligence:
         memory_context = self._compact_memory_context(self.memory.get_context_for_llm())
         spread = self._extract_spread(market_context)
 
-        prompt = f"""
-Mode d'analyse: {self.analysis_mode}
-Instructions utilisateur: {self.analysis_notes}
-Instrument: {instrument}
-Direction suggérée: {signal.get('direction') or 'WAIT'}
-Score technique: {signal.get('score')}/5
-Pattern: {signal.get('pattern')}
-ATR: {signal.get('atr_pips')} pips
-Spread actuel: {spread:.2f} pips
-Compte: balance={account_info.get('balance', INITIAL_CAPITAL):.2f}, pnl_jour={today_pnl:.2f}, positions={account_info.get('open_trades', 0)}
-Contexte marché: {market_context}
-Risque max: {MAX_RISK_PER_TRADE*100:.1f}%
-Objectif jour: {DAILY_TARGET}
-Limite perte: {DAILY_LOSS_LIMIT}
-Indicateurs détaillés:
-{json.dumps(signal.get('details', {}), ensure_ascii=False)}
-Mémoire:
-{memory_context}
-Fenêtre contexte estimée: {self.context_bars} bougies
+        details_compact = self._compact_details(signal.get('details', {}) or {})
 
-Réponse attendue uniquement en JSON:
-{{
-  "decision":"BUY|SELL|WAIT",
-  "confidence":0.0,
-  "stop_loss_pips":20,
-  "take_profit_pips":40,
-  "reasoning":"explication courte et précise",
-  "insight":"résumé marché"
-}}
-"""
+        prompt = f"""Instrument: {instrument} | Dir: {signal.get('direction') or 'WAIT'} | Score: {signal.get('score')}/5 | Pattern: {signal.get('pattern')}
+ATR: {signal.get('atr_pips')} pips | Spread: {spread:.1f} pips
+Balance: {account_info.get('balance', INITIAL_CAPITAL):.0f} | PnL jour: {today_pnl:.2f} | Positions: {account_info.get('open_trades', 0)}
+Max risque: {MAX_RISK_PER_TRADE*100:.0f}% | Objectif: {DAILY_TARGET} | Limite: {DAILY_LOSS_LIMIT}
+Indicateurs: {json.dumps(details_compact, ensure_ascii=False)}
+Mémoire: {memory_context}
+
+JSON uniquement:
+{{"decision":"BUY|SELL|WAIT","confidence":0.0-1.0,"stop_loss_pips":N,"take_profit_pips":N,"reasoning":"court","insight":"résumé"}}"""
 
         result = None
         if fast_mode:

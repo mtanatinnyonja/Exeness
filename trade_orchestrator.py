@@ -14,7 +14,7 @@ from settings import (
 )
 from learning_store import AgentMemory
 from mt5_bridge import build_broker
-from signal_engine import calculate_signal_score
+from signal_engine import calculate_signal_score, _MIN_CANDLES
 from local_llm import LocalIntelligence
 from runtime_db import RuntimeStore
 from ml_model import LocalSignalModel
@@ -70,20 +70,55 @@ class TradeOrchestrator:
     def _min_rr_required(self, instrument: str) -> float:
         return 1.1 if str(instrument).upper().startswith("XAU") else 1.2
 
-    def _should_use_full_llm(self, instrument: str, signal: Dict, spread: float, chosen_rr: float) -> bool:
+    def _should_use_full_llm(self, instrument: str, signal: Dict, spread: float, chosen_rr: float, min_signal_required: int) -> bool:
+        """
+        Conditions assouplies pour que le LLM soit réellement utilisé.
+        Ancienne logique : 5 conditions cumulatives trop restrictives → LLM jamais déclenché.
+        Nouvelle logique : score suffisant + spread correct + au moins l'un des critères qualité.
+        """
         details = signal.get("details", {}) or {}
         score = int(signal.get("score", 0) or 0)
         bias = abs(float(details.get("signal_bias", 0) or 0))
         trend_strength = float(details.get("trend_strength", 0) or 0)
         regime = str(details.get("market_regime", "unknown"))
-        return (
-            score >= max(MIN_SIGNAL_SCORE + 1, 4)
-            and chosen_rr >= self._min_rr_required(instrument)
-            and spread <= self._max_spread_allowed(instrument) * 0.85
-            and bias >= 1.2
-            and trend_strength >= 0.08
-            and regime != "range"
+
+        # Conditions de base non-négociables
+        # On autorise l'analyse LLM un peu plus tôt pour éviter un bot silencieux.
+        if score < max(2, min_signal_required - 1):
+            return False
+        if spread > self._max_spread_allowed(instrument):
+            return False
+
+        # Au moins l'un des critères de qualité doit être rempli
+        quality_ok = (
+            chosen_rr >= self._min_rr_required(instrument)
+            or bias >= 1.0
+            or trend_strength >= 0.06
+            or regime in ("trend_bullish", "trend_bearish")
         )
+        return quality_ok
+
+    def _build_profit_boost_profile(self, today_pnl: float, daily_target: float) -> Dict:
+        """
+        Mode accélération: augmente les opportunités AVANT d'atteindre l'objectif journalier.
+        Garde-fous inchangés (spread, RR, filtre ML, limite perte).
+        """
+        base_floor = int(MIN_SIGNAL_SCORE)
+        if daily_target <= 0 or today_pnl >= daily_target:
+            return {
+                "active": False,
+                "gap": 0.0,
+                "signal_floor": base_floor,
+                "expand_symbols": False,
+            }
+
+        gap = float(max(0.0, daily_target - today_pnl))
+        return {
+            "active": True,
+            "gap": gap,
+            "signal_floor": max(2, base_floor - 1),
+            "expand_symbols": True,
+        }
 
     def _build_live_snapshot(self, instrument: str) -> Dict:
         candles_live = self.broker.get_candles(instrument, "M1", 60)
@@ -142,9 +177,11 @@ class TradeOrchestrator:
         if mode == "preferred":
             return list(preferred)
 
+        # mode "visible": ne garder que les symboles préférés qui sont actifs dans MT5
         try:
-            if hasattr(self.broker, "get_active_symbols"):
-                return self.broker.get_active_symbols(preferred)
+            if hasattr(self.broker, "list_visible_symbols"):
+                visible = [s.upper() for s in self.broker.list_visible_symbols()]
+                return [s for s in preferred if s.upper() in visible]
         except Exception as e:
             self.memory.record_error("symbols", str(e))
         return list(preferred)
@@ -190,29 +227,44 @@ class TradeOrchestrator:
             self._close_all_positions(open_positions, "objectif journalier atteint")
             return
 
+        boost = self._build_profit_boost_profile(today_pnl, daily_target)
+
         instruments = self.get_target_instruments()
+
         if not instruments:
             self.memory.log_session("⚠️ Aucun symbole visible dans MT5 - rien à analyser")
             return
 
         self.memory.log_session(f"📡 Symboles actifs: {', '.join(instruments)}")
+        if boost.get("active"):
+            self.memory.log_session(
+                f"🎯 Mode objectif actif: reste ${boost.get('gap', 0):.2f} | seuil signal={boost.get('signal_floor', MIN_SIGNAL_SCORE)}/5"
+            )
 
         for instrument in instruments:
-            self._analyze_instrument(instrument, account)
+            self._analyze_instrument(instrument, account, min_signal_required=int(boost.get("signal_floor", MIN_SIGNAL_SCORE)))
             time.sleep(0.2)
 
         self.memory.log_session("═══ Cycle terminé ═══")
 
-    def _analyze_instrument(self, instrument: str, account: Dict):
+    def _analyze_instrument(self, instrument: str, account: Dict, min_signal_required: int = MIN_SIGNAL_SCORE):
         if self.is_cooldown_active(instrument):
             self.memory.log_session(f"⏳ {instrument}: cooldown actif")
             return
 
         try:
-            candles_h1 = self.broker.get_candles(instrument, PRIMARY_TIMEFRAME, 120)
+            # Demande suffisamment de bougies pour le warm-up des indicateurs
+            candles_needed = max(120, _MIN_CANDLES + 10)
+            candles_h1 = self.broker.get_candles(instrument, PRIMARY_TIMEFRAME, candles_needed)
             candles_m15 = self.broker.get_candles(instrument, CONFIRM_TIMEFRAME, 80)
-            if len(candles_h1) < 60 or len(candles_m15) < 30:
-                self.memory.log_session(f"⚠️ {instrument}: données insuffisantes")
+
+            if len(candles_h1) < _MIN_CANDLES:
+                self.memory.log_session(
+                    f"⚠️ {instrument}: données insuffisantes ({len(candles_h1)}/{_MIN_CANDLES} bougies)"
+                )
+                return
+            if len(candles_m15) < 30:
+                self.memory.log_session(f"⚠️ {instrument}: données M15 insuffisantes")
                 return
 
             signal_h1 = calculate_signal_score(candles_h1)
@@ -251,9 +303,11 @@ class TradeOrchestrator:
             rr_sell = float(details.get("rr_sell", 0) or 0)
             chosen_rr = rr_buy if direction == "BUY" else rr_sell if direction == "SELL" else max(rr_buy, rr_sell)
             min_rr = self._min_rr_required(instrument)
-            if direction in {"BUY", "SELL"} and chosen_rr < min_rr:
-                self.memory.log_session(f"🛡️ {instrument}: trade ignoré, risk/reward trop faible ({chosen_rr:.2f} < {min_rr:.2f})")
-                return
+            low_rr_guard = direction in {"BUY", "SELL"} and chosen_rr < min_rr
+            if low_rr_guard:
+                self.memory.log_session(
+                    f"ℹ️ {instrument}: RR faible ({chosen_rr:.2f} < {min_rr:.2f}) - analyse IA autorisée, exécution bloquée si signal final agressif"
+                )
 
             ml_eval = self.ml_model.evaluate_signal(signal_h1, spread)
             self.memory.log_session(
@@ -263,10 +317,6 @@ class TradeOrchestrator:
             signal_h1['ml_probability'] = ml_eval.get('probability', 0)
             if ml_eval.get('trained') and float(ml_eval.get('probability', 0) or 0) < 0.46:
                 self.memory.log_session(f"🛡️ {instrument}: ML bloque le trade, proba de réussite trop faible")
-                return
-
-            if regime == "range" and score < (MIN_SIGNAL_SCORE + 1):
-                self.memory.log_session(f"🛡️ {instrument}: marché trop neutre pour un trade avancé")
                 return
 
             self.last_signal_time[instrument] = datetime.utcnow()
@@ -280,7 +330,11 @@ class TradeOrchestrator:
                 f"Resistance distance={details.get('distance_to_resistance_pips', 0)} pips. "
                 f"RiskReward buy={rr_buy:.2f}, sell={rr_sell:.2f}."
             )
-            use_full_llm = self._should_use_full_llm(instrument, signal_h1, spread, chosen_rr)
+            use_full_llm = self._should_use_full_llm(instrument, signal_h1, spread, chosen_rr, min_signal_required)
+            if not use_full_llm and direction in {"BUY", "SELL"} and score >= max(2, min_signal_required - 1):
+                # Filet de sécurité: forcer ponctuellement une vraie consultation LLM
+                # pour éviter de rester bloqué en mode "rapide" pendant des heures.
+                use_full_llm = self.memory.get_llm_calls_today() < 2
             if use_full_llm:
                 decision = self.intelligence.analyze_signal(instrument, signal_h1, account, market_ctx)
                 self.memory.log_session(f"🧠 {instrument}: validation complète par le LLM local")
@@ -289,6 +343,28 @@ class TradeOrchestrator:
                 self.memory.log_session(f"⚡ {instrument}: décision rapide locale (règles + mémoire)")
             if not decision:
                 return
+
+            # Garde-fous d'exécution (après décision IA):
+            # on laisse l'analyse se faire mais on empêche l'ordre si le contexte reste trop faible.
+            if decision.get("decision") in ["BUY", "SELL"] and low_rr_guard:
+                self.memory.log_session(
+                    f"🛡️ {instrument}: ordre bloqué, RR insuffisant ({chosen_rr:.2f} < {min_rr:.2f})"
+                )
+                decision = {
+                    **decision,
+                    "decision": "WAIT",
+                    "reasoning": f"RR insuffisant ({chosen_rr:.2f} < {min_rr:.2f})",
+                }
+
+            if regime == "range" and score < min_signal_required and decision.get("decision") in ["BUY", "SELL"]:
+                self.memory.log_session(
+                    f"🛡️ {instrument}: ordre bloqué, marché en range avec score faible ({score}/{min_signal_required})"
+                )
+                decision = {
+                    **decision,
+                    "decision": "WAIT",
+                    "reasoning": f"Marché range + score insuffisant ({score}/{min_signal_required})",
+                }
 
             self.store.record_signal_sample(instrument, signal_h1, spread, decision)
 
@@ -414,18 +490,19 @@ class TradeOrchestrator:
             }
 
         account = self.broker.get_account_summary()
-        candles = self.broker.get_candles(target, PRIMARY_TIMEFRAME, 120)
+        candles_needed = max(120, _MIN_CANDLES + 10)
+        candles = self.broker.get_candles(target, PRIMARY_TIMEFRAME, candles_needed)
         signal = calculate_signal_score(candles)
 
         spread = self.broker.get_spread_pips(target)
         context = f"Mode test dashboard. Spread actuel: {spread:.1f} pips."
-        decision = self.intelligence.analyze_signal(target, signal, account, context, fast_mode=True)
+        # Le test IA du dashboard doit vérifier le moteur réel (LLM), pas uniquement le fallback rapide.
+        decision = self.intelligence.analyze_signal(target, signal, account, context, fast_mode=False)
         ml_eval = self.ml_model.evaluate_signal(signal, spread)
         signal["ml_probability"] = ml_eval.get("probability", 0)
         if isinstance(decision, dict):
             decision["ml_probability"] = ml_eval.get("probability", 0)
             decision["ml_trained"] = ml_eval.get("trained", False)
-        self.store.record_signal_sample(target, signal, spread, decision or {"decision": "WAIT", "confidence": 0})
         return {
             "instrument": target,
             "signal": signal,
@@ -502,6 +579,10 @@ class TradeOrchestrator:
             "learned_filters": self.memory.memory.get("learned_filters", [])[-5:],
             "runtime_mode": "local-only",
             "profit_target_enabled": float(runtime_settings.get("daily_target", DAILY_TARGET)) > 0,
+            "profit_boost_active": self._build_profit_boost_profile(
+                self.memory.get_daily_pnl(),
+                float(runtime_settings.get("daily_target", DAILY_TARGET))
+            ).get("active", False),
         }
 
 

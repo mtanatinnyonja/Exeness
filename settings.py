@@ -31,7 +31,7 @@ DASHBOARD_PORT = int(os.getenv("DASHBOARD_PORT", "8080"))
 # === IA LOCALE ===
 # ollama = LLM local via localhost, sans autre moteur
 AI_PROVIDER = os.getenv("AI_PROVIDER", "ollama").strip().lower()
-LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "llama3.2:3b").strip()
+LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "qwen2.5:3b").strip()
 LOCAL_LLM_ENDPOINT = os.getenv("LOCAL_LLM_ENDPOINT", "http://127.0.0.1:11434/api/generate").strip()
 LOCAL_LLM_TIMEOUT = int(os.getenv("LOCAL_LLM_TIMEOUT", "60"))
 MAX_LLM_CALLS_PER_DAY = int(os.getenv("MAX_LLM_CALLS_PER_DAY", "0"))  # 0 = illimité
@@ -57,7 +57,6 @@ POSITION_SIZE_USD = 1.0
 # === INSTRUMENTS ===
 INSTRUMENTS = [
     "XAUUSDm",
-    "EURUSDm",
 ]
 
 # === TIMEFRAMES ===
