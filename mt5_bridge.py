@@ -511,8 +511,24 @@ class MT5Broker:
             err = self.mt5.last_error() if result is None else result.retcode
             raise RuntimeError(f"order_send échoué: {err}")
 
+        order_id = getattr(result, "order", None) or getattr(result, "deal", None)
+        # Retrieve the position ticket (often == order, but not always)
+        position_ticket = None
+        try:
+            positions = self.mt5.positions_get(symbol=symbol) or []
+            for pos in positions:
+                if getattr(pos, "ticket", None) == order_id:
+                    position_ticket = order_id
+                    break
+            if position_ticket is None and positions:
+                # Fallback: most recent position for this symbol
+                position_ticket = getattr(positions[-1], "ticket", None)
+        except Exception:
+            pass
+
         return {
-            "broker_id": getattr(result, "order", None) or getattr(result, "deal", None),
+            "broker_id": order_id,
+            "position_ticket": position_ticket or order_id,
             "instrument": symbol,
             "direction": direction,
             "units": volume,

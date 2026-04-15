@@ -436,6 +436,7 @@ class TradeOrchestrator:
                 "stop_loss": order.get("stop_loss", 0.0),
                 "take_profit": order.get("take_profit", 0.0),
                 "broker_id": order.get("broker_id"),
+                "position_ticket": order.get("position_ticket"),
                 "pattern": signal.get("pattern"),
                 "signal_score": signal.get("score", 0),
                 "confidence": confidence,
@@ -452,19 +453,39 @@ class TradeOrchestrator:
             self.memory.log_session(f"❌ Échec ordre {instrument}")
 
     def _reconcile_closed_trades(self, open_positions: List[Dict]):
-        """Detect trades closed by SL/TP on MT5 side and update memory."""
-        open_instruments = {str(p.get("instrument", "")).upper() for p in open_positions}
+        """Detect trades closed on MT5 side (SL/TP/manual) and update memory."""
+        # Build sets of open tickets AND open instruments for matching
+        open_tickets = set()
+        open_instrument_tickets = {}  # instrument -> set of tickets
+        for p in open_positions:
+            t = p.get("ticket")
+            inst = str(p.get("instrument", "")).upper()
+            if t is not None:
+                open_tickets.add(int(t))
+            open_instrument_tickets.setdefault(inst, set())
+            if t is not None:
+                open_instrument_tickets[inst].add(int(t))
 
         for trade in self.memory.trades:
             if trade.get("status") not in ("open",):
                 continue
             instrument = str(trade.get("instrument", "")).upper()
 
-            # If the instrument has no open position on MT5 → trade was closed
-            still_open = instrument in open_instruments
+            # Match by position_ticket first, then broker_id, then by instrument
+            pos_ticket = trade.get("position_ticket")
+            broker_id = trade.get("broker_id")
+            still_open = False
+            if pos_ticket and int(pos_ticket) in open_tickets:
+                still_open = True
+            elif broker_id and int(broker_id) in open_tickets:
+                still_open = True
+            elif instrument in open_instrument_tickets and open_instrument_tickets[instrument]:
+                # Instrument still has positions — assume still open (legacy trades without ticket)
+                still_open = True
+
             if not still_open:
-                # Try to get actual PnL from MT5 deal history
-                pnl_est = self._get_deal_pnl(trade.get("broker_id"))
+                # Try to get actual PnL from MT5 deal history (try position_ticket first, then broker_id)
+                pnl_est = self._get_deal_pnl(trade.get("position_ticket")) or self._get_deal_pnl(trade.get("broker_id"))
                 close_reason = "TP" if pnl_est and pnl_est > 0 else "SL" if pnl_est and pnl_est < 0 else "fermé"
                 if pnl_est is None:
                     pnl_est = 0.0
