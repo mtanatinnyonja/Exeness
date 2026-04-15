@@ -5,7 +5,7 @@ Flux: MT5 → signaux → mémoire → LLM local / règles → paper trade ou ex
 
 import time
 from datetime import datetime, timezone
-from typing import Dict, List
+from typing import Dict, List, Optional
 from settings import (
     INSTRUMENTS, MIN_SIGNAL_SCORE, SIGNAL_COOLDOWN_MINUTES,
     MAX_OPEN_POSITIONS, MAX_RISK_PER_TRADE,
@@ -196,8 +196,11 @@ class TradeOrchestrator:
         max_open_positions = int(settings.get("max_open_positions", MAX_OPEN_POSITIONS))
         daily_loss_limit = float(settings.get("daily_loss_limit", DAILY_LOSS_LIMIT))
 
+        # Reconcile closed trades (SL/TP hit on MT5 side)
+        self._reconcile_closed_trades(open_positions)
+
         if len(open_positions) >= max_open_positions:
-            self.memory.log_session(f"⚠️ Max positions atteint ({max_open_positions})")
+            self.memory.log_session(f"⚠️ Max positions global atteint ({len(open_positions)}/{max_open_positions})")
             self._check_existing_positions(open_positions)
             return
 
@@ -437,6 +440,56 @@ class TradeOrchestrator:
             )
         else:
             self.memory.log_session(f"❌ Échec ordre {instrument}")
+
+    def _reconcile_closed_trades(self, open_positions: List[Dict]):
+        """Detect trades closed by SL/TP on MT5 side and update memory."""
+        open_instruments = {str(p.get("instrument", "")).upper() for p in open_positions}
+
+        for trade in self.memory.trades:
+            if trade.get("status") not in ("open",):
+                continue
+            instrument = str(trade.get("instrument", "")).upper()
+
+            # If the instrument has no open position on MT5 → trade was closed
+            still_open = instrument in open_instruments
+            if not still_open:
+                # Try to get actual PnL from MT5 deal history
+                pnl_est = self._get_deal_pnl(trade.get("broker_id"))
+                close_reason = "TP" if pnl_est and pnl_est > 0 else "SL" if pnl_est and pnl_est < 0 else "fermé"
+                if pnl_est is None:
+                    pnl_est = 0.0
+
+                self.memory.update_trade(trade.get("id"), {
+                    "status": "closed",
+                    "pnl": round(pnl_est, 2),
+                    "close_reason": close_reason,
+                    "closed_at": datetime.utcnow().isoformat(),
+                })
+                emoji = "💰" if pnl_est >= 0 else "💸"
+                self.memory.log_session(
+                    f"{emoji} {instrument}: trade #{trade.get('id')} fermé ({close_reason}) | P&L = ${pnl_est:+.2f}"
+                )
+
+    def _get_deal_pnl(self, order_id) -> Optional[float]:
+        """Get realized PnL from MT5 deal history for a given order."""
+        if not order_id or not hasattr(self.broker, 'mt5'):
+            return None
+        try:
+            from datetime import timedelta
+            start = datetime.utcnow() - timedelta(days=7)
+            end = datetime.utcnow() + timedelta(hours=1)
+            deals = self.broker.mt5.history_deals_get(start, end)
+            if not deals:
+                return None
+            total_pnl = 0.0
+            found = False
+            for deal in deals:
+                if getattr(deal, 'order', None) == int(order_id) or getattr(deal, 'position_id', None) == int(order_id):
+                    total_pnl += float(getattr(deal, 'profit', 0)) + float(getattr(deal, 'swap', 0)) + float(getattr(deal, 'commission', 0))
+                    found = True
+            return round(total_pnl, 2) if found else None
+        except Exception:
+            return None
 
     def _check_existing_positions(self, positions: List[Dict]):
         for pos in positions:

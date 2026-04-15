@@ -1,83 +1,85 @@
 # Robot MT5 Local
 
-Système pratique et fiable en mode local:
-- MT5 / Exness détecté directement
-- apprentissage local avec SQLite
-- mémoire persistante
-- moteur IA local ultra léger
-- option Ollama en localhost uniquement
+Bot de trading autonome MT5 en mode 100% local.
 
----
+## Architecture
 
-## Fichiers principaux
+- **MT5 Broker** : Exness-MT5Trial9 (démo), connexion directe via MetaTrader5 Python
+- **IA locale** : Ollama (qwen2.5:3b) en localhost — aucun appel cloud
+- **ML local** : modèle logistic regression entraîné depuis SQLite (`data/local_runtime.db`)
+- **Mémoire persistante** : `data/agent_memory.json` + `data/trades_history.json`
+- **Dashboard web** : cockpit temps réel sur http://localhost:8765
 
-- settings.py → configuration
-- run_bot.py → lancement
-- trade_orchestrator.py → logique principale
-- mt5_bridge.py → connexion MT5 / paper mode
-- local_llm.py → intelligence locale
-- learning_store.py → mémoire persistante
-- runtime_db.py → base SQLite et réglages
-- control_panel.py → interface web locale
-- signal_engine.py → indicateurs et score
+## Fichiers
 
----
+| Fichier | Rôle |
+|---------|------|
+| `settings.py` | Configuration (paires, risque, seuils) |
+| `run_bot.py` | Point d'entrée cycles de trading |
+| `main.py` | Alias compatible (redirige vers run_bot) |
+| `trade_orchestrator.py` | Logique principale : signaux → IA → exécution |
+| `mt5_bridge.py` | Connexion MT5 + paper broker + money management |
+| `signal_engine.py` | Indicateurs techniques et scoring (RSI, ATR, RR, régime) |
+| `local_llm.py` | Intelligence locale (Ollama / fallback règles) |
+| `learning_store.py` | Mémoire agent, trades, stats, patterns |
+| `runtime_db.py` | SQLite : réglages + échantillons ML |
+| `ml_model.py` | Modèle ML local (logistic regression) |
+| `control_panel.py` | Dashboard web (HTML/JS/CSS embarqué) |
+| `dashboard.py` | Serveur HTTP pour le dashboard |
+
+## Paires actives
+
+`XAUUSDm`, `BTCUSDm`, `EURUSDm` — 1 position max par paire, 3 positions globales max.
 
 ## Démarrage rapide
 
-### 1. Vérifier MT5
-Ouvre ton terminal MT5 Exness en démo.
+### 1. Prérequis
+- Python 3.13+ avec venv activé
+- MT5 Exness ouvert (AutoTrading ON)
+- Ollama installé avec `qwen2.5:3b`
 
 ### 2. Lancer un cycle
 ```powershell
-.\.venv\Scripts\python.exe run_bot.py once
+.\.venv\Scripts\python.exe run_bot.py
 ```
 
-### 3. Voir l'état
+### 3. Dashboard temps réel
 ```powershell
-.\.venv\Scripts\python.exe run_bot.py status
+.\.venv\Scripts\python.exe dashboard.py
 ```
+Ouvre http://localhost:8765
 
-### 4. Lancer le tableau de bord
-```powershell
-.\.venv\Scripts\python.exe control_panel.py
-```
-Puis ouvre http://localhost:8080
-
----
-
-## Mode continu
-
+### 4. Mode continu
 ```powershell
 .\.venv\Scripts\python.exe run_bot.py daemon
 ```
 
----
-
-## IA locale recommandée
-
-Par défaut, le robot tourne déjà en mode local embarqué, sans internet.
-
-Si tu veux un vrai petit LLM local, le meilleur compromis léger/fiable pour cette machine est:
-- modèle recommandé: llama3.2:3b
-- runtime local: Ollama
-- endpoint autorisé: localhost uniquement
-
-Exemple après installation d'Ollama:
+### 5. Les deux en même temps
 ```powershell
-ollama pull llama3.2:3b
+.\start_local.ps1
 ```
-Ensuite, dans l'interface:
-- moteur IA = ollama
-- modèle local = llama3.2:3b
 
----
+## Money Management
 
-## Sécurité actuelle
+- Risque max par trade : 2% du solde (hard cap 5%)
+- SL calculé depuis l'ATR, ajusté si le risque dépasse le budget
+- Volume calculé via `pip_value_per_lot` réel de MT5
+- Ratio RR minimum maintenu ≥ 1.5
 
-- aucun appel API cloud dans le projet
-- aucun broker externe cloud
-- uniquement MT5 local et localhost pour le LLM
+## Fonctionnalités
+
+- Rotation automatique des paires dans le cockpit
+- Réconciliation automatique des trades fermés par SL/TP sur MT5
+- Filtre ML (bloque si proba < 35% avec assez de données)
+- Mémoire de patterns gagnants/perdants
+- Cooldown entre signaux
+- Guard RR faible (risque réduit ×0.6)
+
+## Sécurité
+
+- Aucun appel API cloud
+- Aucun broker externe
+- MT5 local uniquement + Ollama localhost
 - exécution réelle désactivée par défaut
 - apprentissage stocké localement dans data/local_runtime.db
 

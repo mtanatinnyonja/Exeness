@@ -993,7 +993,7 @@ async function fetchStatus() {
         instrument: liveInst,
         market_snapshot: data.live_snapshot,
         signal: {},
-        decision: { decision: 'WAIT', confidence: 0, reasoning: 'En attente d\\'analyse IA…' },
+        decision: { decision: 'WAIT', confidence: 0, reasoning: "En attente d'analyse IA\u2026" },
         ml_eval: {},
       };
       renderAiDecision(livePayload);
