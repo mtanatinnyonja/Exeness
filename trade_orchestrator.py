@@ -530,33 +530,14 @@ class TradeOrchestrator:
         ml_model_state = self.ml_model.get_status()
         llm_calls = self.memory.get_llm_calls_today()
         active_symbols = self.get_target_instruments()
-        # Utiliser le symbole focus demandé par le client, sinon le premier actif
-        matched = next((s for s in active_symbols if s.upper() == focus_symbol.upper()), "") if focus_symbol else ""
-        focus_symbol = matched or (active_symbols[0] if active_symbols else "")
         market_status = self._get_market_status()
-        live_snapshot = None
-        if focus_symbol:
-            try:
-                live_snapshot = self._build_live_snapshot(focus_symbol)
-            except Exception as e:
-                self.memory.record_error("live_snapshot", str(e))
+
         raw_logs = self.memory.memory.get("session_log", [])[-80:]
-        keep_markers = [
-            "Robot démarré", "MT5 détecté", "Cycle démarré", "Cycle terminé",
-            "Marché fermé", "Balance:", "Objectif journalier", "Perte journalière", "Max positions"
-        ]
-        filtered_logs = [
-            line for line in raw_logs
-            if not focus_symbol
-            or focus_symbol.upper() in line.upper()
-            or any(marker in line for marker in keep_markers)
-        ]
         return {
             "timestamp": datetime.utcnow().isoformat(),
             "market_open": bool(market_status.get("open")),
             "market_status": market_status,
             "active_symbols": active_symbols,
-            "live_snapshot": live_snapshot,
             "account": account,
             "open_positions": positions,
             "daily_pnl": self.memory.get_daily_pnl(),
@@ -566,7 +547,7 @@ class TradeOrchestrator:
             "llm_calls_today": llm_calls,
             "api_calls_today": llm_calls,
             "recent_trades": self.memory.get_recent_trades(5),
-            "session_log": filtered_logs[-20:],
+            "session_log": raw_logs[-20:],
             "best_patterns": self.memory.get_best_patterns()[:3],
             "broker": {
                 "name": getattr(self.broker, "name", "unknown"),

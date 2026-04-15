@@ -541,9 +541,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
       <div class="live-ai-box">
         <div class="panel-title" style="margin-bottom:8px;">Cockpit IA en direct</div>
         <div class="focus-toolbar">
-          <span class="refresh-info">Paire focus :</span>
-          <select id="focus-pair-select" onchange="onFocusPairChanged()"></select>
-          <span class="refresh-info">Vue uniquement sur la paire analysée.</span>
+          <span class="refresh-info" id="rotation-label">Rotation auto sur toutes les paires</span>
         </div>
         <div id="ai-live-decision" class="refresh-info" style="white-space:normal;line-height:1.6;">En attente d'une analyse IA...</div>
         <div class="mini-grid">
@@ -693,6 +691,8 @@ let initialAiWarmupDone = false;
 let lastAiPayload = null;
 let latestStatusPayload = null;
 let currentFocusPair = '';
+let rotationIndex = 0;
+let activeSymbolsList = [];
 
 function fmtPnl(val) {
   const v = parseFloat(val) || 0;
@@ -779,35 +779,21 @@ async function saveSettings(silent = false) {
 }
 
 function getFocusedPair() {
-  const sel = document.getElementById('focus-pair-select');
-  return (sel?.value || currentFocusPair || '').trim();
+  return currentFocusPair || (activeSymbolsList[0] || '');
 }
 
-function syncFocusPairs(symbols, preferredList = []) {
-  const sel = document.getElementById('focus-pair-select');
-  if (!sel) return;
+function getNextRotationPair() {
+  if (!activeSymbolsList.length) return '';
+  rotationIndex = (rotationIndex + 1) % activeSymbolsList.length;
+  currentFocusPair = activeSymbolsList[rotationIndex];
+  return currentFocusPair;
+}
 
+function syncFocusPairs(symbols) {
   const visible = (symbols || []).filter(Boolean);
-  if (!visible.length) return;
-
-  // Build unique list: preferred first, then rest of visible
-  const unique = new Map();
-  const preferred = Array.isArray(preferredList) ? preferredList : [];
-  preferred.forEach(p => {
-    const match = visible.find(s => String(s).toUpperCase() === String(p).toUpperCase());
-    if (match) unique.set(match.toUpperCase(), match);
-  });
-  visible.forEach(s => {
-    if (!unique.has(s.toUpperCase())) unique.set(s.toUpperCase(), s);
-  });
-
-  const list = Array.from(unique.values());
-  const prevValue = sel.value || '';
-  const wanted = currentFocusPair || prevValue || list[0] || '';
-
-  sel.innerHTML = list.map(s => '<option value="' + s + '">' + s + '</option>').join('');
-  sel.value = list.find(s => s.toUpperCase() === wanted.toUpperCase()) || list[0] || '';
-  currentFocusPair = sel.value;
+  if (visible.length) activeSymbolsList = visible;
+  const label = document.getElementById('rotation-label');
+  if (label) label.textContent = 'Rotation auto : ' + visible.join(', ');
 }
 
 function renderPairSnapshot(result) {
@@ -904,12 +890,11 @@ function renderAiDecision(result) {
 }
 
 function renderAiChart(data) {
-  const focus = getFocusedPair();
   const rowsAll = (data.ml_history || []).slice(-40);
-  const rows = focus ? rowsAll.filter(row => String(row.instrument || '').toUpperCase() === focus.toUpperCase()).slice(-20) : rowsAll.slice(-20);
+  const rows = rowsAll.slice(-20);
   const el = document.getElementById('ai-history-chart');
   if (!rows.length) {
-    el.innerHTML = '<div class="refresh-info">Pas encore d\'historique IA sur cette paire.</div>';
+    el.innerHTML = '<div class="refresh-info">Pas encore d\'historique IA.</div>';
     return;
   }
   el.innerHTML = rows.map((row) => {
@@ -926,13 +911,7 @@ function renderAiChart(data) {
   }).join('');
 }
 
-function onFocusPairChanged() {
-  currentFocusPair = getFocusedPair();
-  if (latestStatusPayload) {
-    renderAiChart(latestStatusPayload);
-  }
-  testAI();
-}
+
 
 function toggleAutoAI() {
   autoAiEnabled = !autoAiEnabled;
@@ -944,11 +923,8 @@ function toggleAutoAI() {
 async function testAI() {
   if (aiBusy) return;
   aiBusy = true;
-  document.getElementById('ai-test-result').textContent = 'Test IA en cours...';
-  const focused = getFocusedPair();
-  const typed = (document.getElementById('setting-preferred-symbols').value || '').split(',')[0]?.trim();
-  const visible = (document.getElementById('active-symbols').textContent || '').split(',')[0]?.trim();
-  const symbol = focused || typed || visible || '';
+  const symbol = getNextRotationPair() || (document.getElementById('setting-preferred-symbols').value || '').split(',')[0]?.trim() || '';
+  document.getElementById('ai-test-result').textContent = 'Analyse IA de ' + symbol + '...';
   try {
     const res = await fetch('/api/test-ai', {
       method: 'POST',
@@ -979,8 +955,7 @@ async function testAI() {
 
 async function fetchStatus() {
   try {
-    const focus = encodeURIComponent(getFocusedPair());
-    const res = await fetch('/api/status?focus=' + focus);
+    const res = await fetch('/api/status');
     const data = await res.json();
     latestStatusPayload = data;
 
@@ -1007,24 +982,12 @@ async function fetchStatus() {
         ? 'Le cockpit affiche un signal IA en aperçu sur la paire active. Un ordre réel MT5 n\'est envoyé que par le cycle automatique quand toutes les validations sont encore confirmées.'
         : 'Le bot autonome analyse la paire active en continu. Active le trading réel démo pour autoriser les ouvertures et fermetures automatiques.';
     }
-    syncFocusPairs(data.active_symbols || [], data.settings?.preferred_symbols || []);
+    syncFocusPairs(data.active_symbols || []);
     renderAiChart(data);
-    if (data.live_snapshot) {
-      const snapInstrument = data.live_snapshot.instrument || currentFocusPair || (data.active_symbols || [])[0] || '—';
-      // Only reuse lastAiPayload if it matches the current focus pair
-      const matchingAi = lastAiPayload && String(lastAiPayload.instrument || '').toUpperCase() === String(snapInstrument).toUpperCase()
-        ? lastAiPayload : null;
-      const livePayload = {
-        instrument: snapInstrument,
-        signal: { score: matchingAi?.signal?.score || 0, details: data.live_snapshot, atr_pips: data.live_snapshot.atr_pips || 0 },
-        decision: matchingAi?.decision || { decision: 'WAIT', confidence: 0, reasoning: '' },
-        market_snapshot: data.live_snapshot
-      };
-      renderAiDecision(livePayload);
-    } else if (lastAiPayload) {
+    if (lastAiPayload) {
       renderAiDecision(lastAiPayload);
     }
-    if (!initialAiWarmupDone && !aiBusy && currentFocusPair) {
+    if (!initialAiWarmupDone && !aiBusy && activeSymbolsList.length) {
       initialAiWarmupDone = true;
       setTimeout(() => testAI(), 300);
     }
