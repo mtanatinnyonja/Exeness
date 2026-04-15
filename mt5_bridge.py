@@ -75,16 +75,34 @@ class PaperBroker:
             return 0.01
         return 0.0001
 
+    def _pip_value_per_lot(self, instrument: str) -> float:
+        name = str(instrument).upper()
+        if name.startswith(("XAU", "XAG")):
+            return 10.0
+        if name.startswith(("BTC", "ETH")):
+            return 1.0
+        return 10.0
+
+    def _volume_min(self, instrument: str) -> float:
+        return 0.01
+
+    def _volume_step(self, instrument: str) -> float:
+        return 0.01
+
     def get_spread_pips(self, instrument: str) -> float:
         bid, ask = self.get_current_price(instrument)
         return round((ask - bid) / self._pip_size(instrument), 1)
 
-    def calculate_units(self, instrument: str, risk_usd: float, stop_loss_pips: float) -> int:
-        if stop_loss_pips <= 0:
-            return 1000
-        return max(1000, min(int((risk_usd / stop_loss_pips) * 1000), 10000))
+    def calculate_volume(self, instrument: str, risk_usd: float, sl_pips: float) -> float:
+        if sl_pips <= 0:
+            return self._volume_min(instrument)
+        pv = self._pip_value_per_lot(instrument)
+        vol = risk_usd / max(0.01, sl_pips * pv)
+        step = self._volume_step(instrument)
+        vol = max(self._volume_min(instrument), round(vol / step) * step)
+        return round(vol, 2)
 
-    def place_market_order(self, instrument: str, direction: str, units: int, stop_loss_pips: float, take_profit_pips: float, comment: str = "") -> Optional[Dict]:
+    def place_market_order(self, instrument: str, direction: str, volume: float, stop_loss_pips: float, take_profit_pips: float, comment: str = "") -> Optional[Dict]:
         bid, ask = self.get_current_price(instrument)
         entry = ask if direction == "BUY" else bid
         pip = self._pip_size(instrument)
@@ -92,7 +110,7 @@ class PaperBroker:
             "broker_id": f"paper-{int(datetime.utcnow().timestamp())}",
             "instrument": instrument,
             "direction": direction,
-            "units": units,
+            "volume": round(volume, 2),
             "entry_price": entry,
             "stop_loss": entry - stop_loss_pips * pip if direction == "BUY" else entry + stop_loss_pips * pip,
             "take_profit": entry + take_profit_pips * pip if direction == "BUY" else entry - take_profit_pips * pip,
@@ -240,6 +258,21 @@ class MT5Broker:
 
     def _pip_factor(self, symbol: str) -> float:
         return 1.0 / max(self._pip_size(symbol), 1e-10)
+
+    def _pip_value_per_lot(self, symbol: str) -> float:
+        info = self.mt5.symbol_info(symbol) if self.mt5 else None
+        tick_size = float(getattr(info, "trade_tick_size", 0.0001) or 0.0001)
+        tick_value = float(getattr(info, "trade_tick_value", 0.01) or 0.01)
+        pip = self._pip_size(symbol)
+        return (pip / tick_size) * tick_value
+
+    def _volume_min(self, symbol: str) -> float:
+        info = self.mt5.symbol_info(symbol) if self.mt5 else None
+        return float(getattr(info, "volume_min", 0.01) or 0.01)
+
+    def _volume_step(self, symbol: str) -> float:
+        info = self.mt5.symbol_info(symbol) if self.mt5 else None
+        return float(getattr(info, "volume_step", 0.01) or 0.01)
 
     def list_visible_symbols(self) -> List[str]:
         self._ensure_ready()
@@ -423,13 +456,17 @@ class MT5Broker:
         bid, ask = self.get_current_price(instrument)
         return round((ask - bid) * self._pip_factor(symbol), 1)
 
-    def calculate_units(self, instrument: str, risk_usd: float, stop_loss_pips: float) -> int:
-        if stop_loss_pips <= 0:
-            return 1000
-        micro_lots = max(1, int(risk_usd / max(0.5, stop_loss_pips * 0.1)))
-        return max(1000, min(micro_lots * 1000, 100000))
+    def calculate_volume(self, instrument: str, risk_usd: float, sl_pips: float) -> float:
+        symbol = self._resolve_symbol(instrument)
+        if sl_pips <= 0:
+            return self._volume_min(symbol)
+        pv = self._pip_value_per_lot(symbol)
+        vol = risk_usd / max(0.01, sl_pips * pv)
+        step = self._volume_step(symbol)
+        vol = max(self._volume_min(symbol), round(vol / step) * step)
+        return round(min(vol, 1.0), 2)
 
-    def place_market_order(self, instrument: str, direction: str, units: int, stop_loss_pips: float, take_profit_pips: float, comment: str = "") -> Optional[Dict]:
+    def place_market_order(self, instrument: str, direction: str, volume: float, stop_loss_pips: float, take_profit_pips: float, comment: str = "") -> Optional[Dict]:
         symbol = self._resolve_symbol(instrument)
         bid, ask = self.get_current_price(instrument)
         price = ask if direction == "BUY" else bid
@@ -442,7 +479,7 @@ class MT5Broker:
                 "broker_id": f"paper-{int(datetime.utcnow().timestamp())}",
                 "instrument": symbol,
                 "direction": direction,
-                "units": units,
+                "volume": round(volume, 2),
                 "entry_price": price,
                 "stop_loss": sl,
                 "take_profit": tp,
@@ -453,7 +490,7 @@ class MT5Broker:
         if info is None:
             raise RuntimeError(f"Informations symbole indisponibles pour {symbol}")
 
-        volume = round(max(0.01, min(units / 100000, 1.0)), 2)
+        volume = round(max(self._volume_min(symbol), min(volume, 1.0)), 2)
         order_type = self.mt5.ORDER_TYPE_BUY if direction == "BUY" else self.mt5.ORDER_TYPE_SELL
         request = {
             "action": self.mt5.TRADE_ACTION_DEAL,

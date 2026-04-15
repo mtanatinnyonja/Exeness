@@ -881,20 +881,25 @@ function renderAiDecision(result) {
   const klass = action === 'BUY' ? 'buy' : action === 'SELL' ? 'sell' : 'wait';
   const confidence = Math.round((parseFloat(d.confidence || 0) || 0) * 100);
   const mlProb = Math.round((parseFloat(d.ml_probability ?? signal.ml_probability ?? ml.probability ?? 0) || 0) * 100);
-  const reasoningParts = [d.reasoning, snap.human_summary || details.human_summary].filter(Boolean);
+  const humanSummary = snap.human_summary || details.human_summary || '';
+  const reasoning = d.reasoning || '';
+  // Avoid duplicate: if reasoning already contains the human summary, show only reasoning
+  const displayText = reasoning && humanSummary && reasoning.includes(humanSummary.slice(0, 30))
+    ? reasoning
+    : [reasoning, humanSummary].filter(Boolean).join(' · ') || 'Analyse en attente.';
 
-  currentFocusPair = result.instrument || currentFocusPair;
   document.getElementById('ai-live-symbol').textContent = result.instrument || '—';
   document.getElementById('ai-live-action').innerHTML = '<span class="ai-pill ' + klass + '">' + action + '</span>';
   document.getElementById('ai-live-confidence').textContent = confidence + '%';
   document.getElementById('ai-live-ml').textContent = mlProb + '%';
+  const rr = action === 'SELL' ? (details.rr_sell ?? snap.rr_sell ?? 0) : (details.rr_buy ?? snap.rr_buy ?? 0);
   document.getElementById('ai-live-decision').innerHTML =
     '<strong>' + (result.instrument || '—') + '</strong> · ' +
     '<span class="ai-pill ' + klass + '">' + action + '</span>' +
     ' Score ' + (signal.score || 0) + '/5 · Régime ' + (details.market_regime || snap.regime || '—') +
-    ' · RR ' + ((action === 'SELL' ? (details.rr_sell ?? snap.rr_sell) : (details.rr_buy ?? snap.rr_buy)) ?? 0) +
+    ' · RR ' + (parseFloat(rr) || 0).toFixed(2) +
     ' · ML ' + mlProb + '%' +
-    '<br>' + (reasoningParts.join(' · ') || 'Analyse en attente.');
+    '<br>' + displayText;
   renderPairSnapshot(result);
 }
 
@@ -1005,10 +1010,14 @@ async function fetchStatus() {
     syncFocusPairs(data.active_symbols || [], data.settings?.preferred_symbols || []);
     renderAiChart(data);
     if (data.live_snapshot) {
+      const snapInstrument = data.live_snapshot.instrument || currentFocusPair || (data.active_symbols || [])[0] || '—';
+      // Only reuse lastAiPayload if it matches the current focus pair
+      const matchingAi = lastAiPayload && String(lastAiPayload.instrument || '').toUpperCase() === String(snapInstrument).toUpperCase()
+        ? lastAiPayload : null;
       const livePayload = {
-        instrument: data.live_snapshot.instrument || currentFocusPair || (data.active_symbols || [])[0] || '—',
-        signal: { score: lastAiPayload?.signal?.score || 0, details: data.live_snapshot, atr_pips: data.live_snapshot.atr_pips || 0 },
-        decision: lastAiPayload?.decision || { decision: 'WAIT', confidence: 0, reasoning: data.live_snapshot.human_summary || 'Lecture technique live.' },
+        instrument: snapInstrument,
+        signal: { score: matchingAi?.signal?.score || 0, details: data.live_snapshot, atr_pips: data.live_snapshot.atr_pips || 0 },
+        decision: matchingAi?.decision || { decision: 'WAIT', confidence: 0, reasoning: '' },
         market_snapshot: data.live_snapshot
       };
       renderAiDecision(livePayload);

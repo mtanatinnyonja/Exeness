@@ -373,24 +373,43 @@ class TradeOrchestrator:
         direction = decision["decision"]
         atr = max(6, int(round(float(signal.get("atr_pips", 20) or 20))))
         raw_sl = int(decision.get("stop_loss_pips", atr) or atr)
-        sl_pips = max(atr, raw_sl)  # Jamais en dessous de l'ATR
-        tp_pips = max(sl_pips, int(decision.get("take_profit_pips", sl_pips * 2) or sl_pips * 2))
+        sl_pips = max(atr, raw_sl)
+        rr_ratio = max(1.5, tp_pips_raw / sl_pips if (tp_pips_raw := int(decision.get("take_profit_pips", sl_pips * 2) or sl_pips * 2)) and sl_pips else 2.0)
+        tp_pips = max(sl_pips, int(sl_pips * rr_ratio))
         confidence = float(decision.get("confidence", 0.5))
         risk_multiplier = float(decision.get("risk_multiplier", 1.0))
 
         settings = self.store.get_settings()
-        max_risk = float(settings.get("max_risk_per_trade", MAX_RISK_PER_TRADE))
-        risk_usd = max(0.5, account.get("balance", 0) * max_risk * risk_multiplier)
-        units = self.broker.calculate_units(instrument, risk_usd, sl_pips)
+        balance = max(1.0, account.get("balance", 0))
+        max_risk_pct = float(settings.get("max_risk_per_trade", MAX_RISK_PER_TRADE))
+        risk_usd = max(0.5, balance * max_risk_pct * risk_multiplier)
+
+        # --- Money management: cap SL so actual risk stays within budget ---
+        pip_value = getattr(self.broker, '_pip_value_per_lot', lambda x: 10.0)(instrument)
+        vol_min = getattr(self.broker, '_volume_min', lambda x: 0.01)(instrument)
+        min_risk_at_sl = vol_min * sl_pips * pip_value
+        max_allowed_risk = balance * 0.05  # Hard cap 5% of balance
+
+        if min_risk_at_sl > risk_usd and min_risk_at_sl > max_allowed_risk:
+            # SL too wide for this capital at min volume → reduce SL, keep RR
+            new_sl = max(6, int(max_allowed_risk / max(0.001, vol_min * pip_value)))
+            self.memory.log_session(
+                f"⚠️ Money mgmt: SL {sl_pips}→{new_sl}p (capital ${balance:.0f}, risque max ${max_allowed_risk:.2f})"
+            )
+            sl_pips = new_sl
+            tp_pips = max(sl_pips, int(sl_pips * rr_ratio))
+
+        volume = self.broker.calculate_volume(instrument, risk_usd, sl_pips)
+        actual_risk = volume * sl_pips * pip_value
 
         self.memory.log_session(
-            f"📈 Ordre: {direction} {instrument} | units={units} | SL={sl_pips}p | TP={tp_pips}p | risque=${risk_usd:.2f}"
+            f"📈 Ordre: {direction} {instrument} | vol={volume} | SL={sl_pips}p | TP={tp_pips}p | risque=${actual_risk:.2f}"
         )
 
         order = self.broker.place_market_order(
             instrument=instrument,
             direction=direction,
-            units=units,
+            volume=volume,
             stop_loss_pips=sl_pips,
             take_profit_pips=tp_pips,
             comment=f"LOCAL|{signal.get('pattern', '')[:20]}|{int(confidence * 100)}"
@@ -400,7 +419,7 @@ class TradeOrchestrator:
             trade_id = self.memory.add_trade({
                 "instrument": instrument,
                 "direction": direction,
-                "units": units,
+                "volume": volume,
                 "entry_price": order.get("entry_price", 0.0),
                 "stop_loss": order.get("stop_loss", 0.0),
                 "take_profit": order.get("take_profit", 0.0),
@@ -410,12 +429,12 @@ class TradeOrchestrator:
                 "confidence": confidence,
                 "sl_pips": sl_pips,
                 "tp_pips": tp_pips,
-                "risk_usd": risk_usd,
+                "risk_usd": round(actual_risk, 2),
                 "reasoning": decision.get("reasoning", ""),
                 "status": order.get("status", "open")
             })
             self.memory.log_session(
-                f"✅ Trade #{trade_id} créé: {direction} {instrument} @ {order.get('entry_price', 0):.5f} [{order.get('status', 'open')}]"
+                f"✅ Trade #{trade_id} créé: {direction} {instrument} vol={volume} @ {order.get('entry_price', 0):.5f} [{order.get('status', 'open')}]"
             )
         else:
             self.memory.log_session(f"❌ Échec ordre {instrument}")
