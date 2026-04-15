@@ -515,7 +515,7 @@ class MT5Broker:
             "broker_id": getattr(result, "order", None) or getattr(result, "deal", None),
             "instrument": symbol,
             "direction": direction,
-            "units": units,
+            "units": volume,
             "entry_price": price,
             "stop_loss": sl,
             "take_profit": tp,

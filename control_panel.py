@@ -984,7 +984,20 @@ async function fetchStatus() {
     }
     syncFocusPairs(data.active_symbols || []);
     renderAiChart(data);
-    if (lastAiPayload) {
+
+    // Live snapshot rotation: show chart even before first AI call
+    if (data.live_snapshot && data.live_snapshot.closes) {
+      const liveInst = data.live_snapshot.instrument || '—';
+      const aiMatch = lastAiPayload && lastAiPayload.instrument === liveInst;
+      const livePayload = aiMatch ? Object.assign({}, lastAiPayload, { market_snapshot: data.live_snapshot }) : {
+        instrument: liveInst,
+        market_snapshot: data.live_snapshot,
+        signal: {},
+        decision: { decision: 'WAIT', confidence: 0, reasoning: 'En attente d\\'analyse IA…' },
+        ml_eval: {},
+      };
+      renderAiDecision(livePayload);
+    } else if (lastAiPayload) {
       renderAiDecision(lastAiPayload);
     }
     if (!initialAiWarmupDone && !aiBusy && activeSymbolsList.length) {

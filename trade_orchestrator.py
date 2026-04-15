@@ -19,6 +19,8 @@ from local_llm import LocalIntelligence
 from runtime_db import RuntimeStore
 from ml_model import LocalSignalModel
 
+_status_rotation_idx = 0
+
 
 class TradeOrchestrator:
     def __init__(self, quiet: bool = False):
@@ -532,6 +534,16 @@ class TradeOrchestrator:
         active_symbols = self.get_target_instruments()
         market_status = self._get_market_status()
 
+        # Rotation live snapshot across all active pairs
+        global _status_rotation_idx
+        live_snapshot = None
+        if active_symbols:
+            _status_rotation_idx = (_status_rotation_idx + 1) % len(active_symbols)
+            try:
+                live_snapshot = self._build_live_snapshot(active_symbols[_status_rotation_idx])
+            except Exception as e:
+                self.memory.record_error("live_snapshot", str(e))
+
         raw_logs = self.memory.memory.get("session_log", [])[-80:]
         return {
             "timestamp": datetime.utcnow().isoformat(),
@@ -563,4 +575,5 @@ class TradeOrchestrator:
             "ml_history": ml_history,
             "learned_filters": self.memory.memory.get("learned_filters", [])[-5:],
             "runtime_mode": "local-only",
+            "live_snapshot": live_snapshot,
         }
