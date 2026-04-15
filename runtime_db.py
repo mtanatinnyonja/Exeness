@@ -242,3 +242,12 @@ class RuntimeStore:
             }
             for row in rows[::-1]
         ]
+
+    def count_ml_samples_for(self, instrument: str, window: int = 220) -> int:
+        """Count samples for an instrument within the ML training window (last N samples)."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM (SELECT instrument FROM ml_samples ORDER BY id DESC LIMIT ?) sub WHERE UPPER(instrument) = ?",
+                (int(window), str(instrument).upper()),
+            ).fetchone()
+        return int(row[0] or 0) if row else 0

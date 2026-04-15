@@ -281,13 +281,8 @@ class TradeOrchestrator:
 
             rr_buy = float(details.get("rr_buy", 0) or 0)
             rr_sell = float(details.get("rr_sell", 0) or 0)
-            chosen_rr = rr_buy if direction == "BUY" else rr_sell if direction == "SELL" else max(rr_buy, rr_sell)
             min_rr = self._min_rr_required(instrument)
-            low_rr_guard = direction in {"BUY", "SELL"} and chosen_rr < min_rr
-            if low_rr_guard:
-                self.memory.log_session(
-                    f"ℹ️ {instrument}: RR faible ({chosen_rr:.2f} < {min_rr:.2f}) - analyse IA autorisée, exécution bloquée si signal final agressif"
-                )
+            # Le RR guard sera recalculé après la décision de l'IA (sur la direction finale)
 
             ml_eval = self.ml_model.evaluate_signal(signal_h1, spread)
             self.memory.log_session(
@@ -295,9 +290,14 @@ class TradeOrchestrator:
                 f"samples={ml_eval.get('sample_count', 0)} | source={ml_eval.get('source', 'n/a')}"
             )
             signal_h1['ml_probability'] = ml_eval.get('probability', 0)
-            if ml_eval.get('trained') and float(ml_eval.get('probability', 0) or 0) < 0.35:
-                self.memory.log_session(f"🛡️ {instrument}: ML bloque le trade, proba trop faible ({ml_eval.get('probability', 0):.2f})")
-                return
+            ml_prob = float(ml_eval.get('probability', 0) or 0)
+            if ml_eval.get('trained') and ml_prob < 0.35:
+                inst_samples = self.store.count_ml_samples_for(instrument)
+                if inst_samples >= 20:
+                    self.memory.log_session(f"🛡️ {instrument}: ML bloque le trade, proba trop faible ({ml_prob:.2f})")
+                    return
+                else:
+                    self.memory.log_session(f"⚠️ {instrument}: ML proba faible ({ml_prob:.2f}) mais données insuffisantes ({inst_samples} samples) → on continue")
 
             self.last_signal_time[instrument] = datetime.utcnow()
             market_ctx = (
@@ -310,6 +310,7 @@ class TradeOrchestrator:
                 f"Resistance distance={details.get('distance_to_resistance_pips', 0)} pips. "
                 f"RiskReward buy={rr_buy:.2f}, sell={rr_sell:.2f}."
             )
+            chosen_rr = rr_buy if direction == "BUY" else rr_sell if direction == "SELL" else max(rr_buy, rr_sell)
             use_full_llm = self._should_use_full_llm(instrument, signal_h1, spread, chosen_rr, min_signal_required)
             if not use_full_llm and direction in {"BUY", "SELL"} and score >= max(2, min_signal_required - 1):
                 # Filet de sécurité: forcer ponctuellement une vraie consultation LLM
@@ -324,11 +325,18 @@ class TradeOrchestrator:
             if not decision:
                 return
 
-            # Garde-fou RR: réduit le risque au lieu de bloquer complètement
+            # Recalculer le RR guard basé sur la direction finale de l'IA (pas la direction brute du signal)
+            final_dir = str(decision.get("decision", "")).upper()
+            if final_dir in ("BUY", "SELL"):
+                final_rr = rr_buy if final_dir == "BUY" else rr_sell
+                low_rr_guard = final_rr < min_rr
+            else:
+                low_rr_guard = False
+
+            # Garde-fou RR: réduit le risque (appliqué via rr_penalty dans risk_multiplier final)
             if decision.get("decision") in ["BUY", "SELL"] and low_rr_guard:
-                decision["risk_multiplier"] = round(decision.get("risk_multiplier", 1.0) * 0.6, 2)
                 self.memory.log_session(
-                    f"⚠️ {instrument}: RR faible ({chosen_rr:.2f} < {min_rr:.2f}) → risque réduit ×0.6"
+                    f"⚠️ {instrument}: RR faible ({final_rr:.2f} < {min_rr:.2f}) → risque réduit ×0.6"
                 )
 
             if regime == "range" and score < min_signal_required and decision.get("decision") in ["BUY", "SELL"]:
@@ -344,7 +352,8 @@ class TradeOrchestrator:
             self.store.record_signal_sample(instrument, signal_h1, spread, decision)
 
             ml_boost = 1.1 if float(ml_eval.get('probability', 0) or 0) >= 0.60 else 1.0
-            decision["risk_multiplier"] = round(learning["risk_multiplier"] * ml_boost, 2)
+            rr_penalty = 0.6 if low_rr_guard and decision.get("decision") in ["BUY", "SELL"] else 1.0
+            decision["risk_multiplier"] = round(learning["risk_multiplier"] * ml_boost * rr_penalty, 2)
             instrument_positions = [p for p in self.broker.get_open_positions() if str(p.get("instrument", "")).upper() == instrument.upper()]
 
             if decision["decision"] in ["BUY", "SELL"]:
@@ -490,7 +499,7 @@ class TradeOrchestrator:
             "market_snapshot": self._build_live_snapshot(target),
         }
 
-    def get_status(self) -> Dict:
+    def get_status(self, focus_symbol: str = "") -> Dict:
         try:
             account = self.broker.get_account_summary()
             positions = self.broker.get_open_positions()
@@ -505,7 +514,11 @@ class TradeOrchestrator:
         ml_model_state = self.ml_model.get_status()
         llm_calls = self.memory.get_llm_calls_today()
         active_symbols = self.get_target_instruments()
-        focus_symbol = active_symbols[0] if active_symbols else ""
+        # Utiliser le symbole focus demandé par le client, sinon le premier actif
+        if not focus_symbol or focus_symbol not in [s.upper() for s in active_symbols]:
+            focus_symbol = active_symbols[0] if active_symbols else ""
+        else:
+            focus_symbol = next((s for s in active_symbols if s.upper() == focus_symbol.upper()), active_symbols[0] if active_symbols else "")
         market_status = self._get_market_status()
         live_snapshot = None
         if focus_symbol:

@@ -974,7 +974,8 @@ async function testAI() {
 
 async function fetchStatus() {
   try {
-    const res = await fetch('/api/status');
+    const focus = encodeURIComponent(getFocusedPair());
+    const res = await fetch('/api/status?focus=' + focus);
     const data = await res.json();
     latestStatusPayload = data;
 
@@ -1200,11 +1201,14 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        if self.path == '/api/status':
+        if self.path.startswith('/api/status'):
             try:
                 from trade_orchestrator import TradeOrchestrator
+                from urllib.parse import urlparse, parse_qs
+                qs = parse_qs(urlparse(self.path).query)
+                focus = (qs.get('focus', [''])[0] or '').strip()
                 agent = TradeOrchestrator(quiet=True)
-                status = agent.get_status()
+                status = agent.get_status(focus_symbol=focus)
                 self._send_json(status)
             except Exception as e:
                 self._send_json({"error": str(e)}, status=500)
