@@ -162,11 +162,10 @@ class TradeOrchestrator:
         if not visible:
             return list(INSTRUMENTS)[:max_symbols]
 
-        # preferred_symbols = priorité d'ordre, mais TOUTES les paires visibles sont incluses
+        # preferred_symbols = filtre strict (uniquement les paires en graphique)
         if preferred:
-            ordered = [s for s in visible if any(s.upper() == p.upper() for p in preferred)]
-            rest = [s for s in visible if s not in ordered]
-            return (ordered + rest)[:max_symbols]
+            filtered = [s for s in visible if any(s.upper() == p.upper() for p in preferred)]
+            return filtered[:max_symbols] if filtered else visible[:max_symbols]
 
         return visible[:max_symbols]
 
