@@ -162,13 +162,11 @@ class TradeOrchestrator:
         if not visible:
             return list(INSTRUMENTS)[:max_symbols]
 
-        # Si preferred_symbols est défini → trader uniquement ceux-là
-        # (l'utilisateur y met les paires qu'il a en graphique dans MT5)
+        # preferred_symbols = priorité d'ordre, mais TOUTES les paires visibles sont incluses
         if preferred:
-            filtered = [s for s in visible if any(
-                s.upper() == p.upper() for p in preferred
-            )]
-            return filtered[:max_symbols] if filtered else visible[:max_symbols]
+            ordered = [s for s in visible if any(s.upper() == p.upper() for p in preferred)]
+            rest = [s for s in visible if s not in ordered]
+            return (ordered + rest)[:max_symbols]
 
         return visible[:max_symbols]
 
