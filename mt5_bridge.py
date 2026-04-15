@@ -284,6 +284,7 @@ class MT5Broker:
         now = datetime.now(timezone.utc)
         candidates = list(symbols or self.get_active_symbols())
         freshest = None
+        live_symbols = []
 
         for instrument in candidates:
             try:
@@ -295,25 +296,30 @@ class MT5Broker:
                 age_sec = max(0, int((now - tick_time).total_seconds()))
                 bid = float(getattr(tick, "bid", 0.0) or 0.0)
                 ask = float(getattr(tick, "ask", 0.0) or 0.0)
+                is_live = age_sec <= max_tick_age_sec and (bid > 0 or ask > 0)
                 entry = {
-                    "open": age_sec <= max_tick_age_sec and (bid > 0 or ask > 0),
+                    "open": is_live,
                     "symbol": symbol,
                     "tick_age_sec": age_sec,
                     "tick_time": tick_time.isoformat(),
                     "bid": bid,
                     "ask": ask,
                 }
+                if is_live:
+                    live_symbols.append(symbol)
                 if freshest is None or age_sec < freshest.get("tick_age_sec", 10**9):
                     freshest = entry
             except Exception:
                 continue
 
         if freshest:
+            symbols_label = ", ".join(live_symbols) if live_symbols else freshest["symbol"]
             freshest["reason"] = (
-                f"Cotations MT5 live sur {freshest['symbol']} · dernier tick {freshest['tick_age_sec']}s"
+                f"Cotations MT5 live sur {symbols_label} · dernier tick {freshest['tick_age_sec']}s"
                 if freshest["open"]
                 else f"Pas de tick récent sur {freshest['symbol']} · {freshest['tick_age_sec']}s"
             )
+            freshest["live_symbols"] = live_symbols
             return freshest
 
         return {
@@ -321,6 +327,7 @@ class MT5Broker:
             "symbol": candidates[0] if candidates else None,
             "tick_age_sec": None,
             "reason": "Aucune cotation MT5 disponible",
+            "live_symbols": [],
         }
 
     def get_signal_outcome_label(self, instrument: str, sample_time: str, direction: str, spread: float = 0.0, horizon_minutes: int = 15) -> Optional[int]:

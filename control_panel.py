@@ -787,27 +787,27 @@ function syncFocusPairs(symbols, preferredList = []) {
   const sel = document.getElementById('focus-pair-select');
   if (!sel) return;
 
-  const fromField = ((document.getElementById('setting-preferred-symbols')?.value || '').split(',')[0] || '').trim();
-  const fromSettings = Array.isArray(preferredList) && preferredList.length ? String(preferredList[0] || '').trim() : '';
-  const rawPreferred = fromField || fromSettings;
-  const normalizedPreferred = rawPreferred ? rawPreferred.replace(/\s+/g, '').toUpperCase() : '';
   const visible = (symbols || []).filter(Boolean);
-  const matchedPreferred = visible.find(s => String(s).toUpperCase() === normalizedPreferred) || rawPreferred;
+  if (!visible.length) return;
 
+  // Build unique list: preferred first, then rest of visible
   const unique = new Map();
-  if (matchedPreferred) unique.set(String(matchedPreferred).toUpperCase(), matchedPreferred);
+  const preferred = Array.isArray(preferredList) ? preferredList : [];
+  preferred.forEach(p => {
+    const match = visible.find(s => String(s).toUpperCase() === String(p).toUpperCase());
+    if (match) unique.set(match.toUpperCase(), match);
+  });
   visible.forEach(s => {
-    const key = String(s).toUpperCase();
-    if (!unique.has(key)) unique.set(key, s);
+    if (!unique.has(s.toUpperCase())) unique.set(s.toUpperCase(), s);
   });
 
   const list = Array.from(unique.values());
-  const finalList = list;
-  const wanted = currentFocusPair || matchedPreferred || finalList[0] || '';
+  const prevValue = sel.value || '';
+  const wanted = currentFocusPair || prevValue || list[0] || '';
 
-  sel.innerHTML = finalList.map(s => '<option value="' + s + '">' + s + '</option>').join('');
-  sel.value = finalList.includes(wanted) ? wanted : (finalList[0] || '');
-  currentFocusPair = sel.value || matchedPreferred || '';
+  sel.innerHTML = list.map(s => '<option value="' + s + '">' + s + '</option>').join('');
+  sel.value = list.find(s => s.toUpperCase() === wanted.toUpperCase()) || list[0] || '';
+  currentFocusPair = sel.value;
 }
 
 function renderPairSnapshot(result) {

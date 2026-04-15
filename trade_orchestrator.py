@@ -515,10 +515,8 @@ class TradeOrchestrator:
         llm_calls = self.memory.get_llm_calls_today()
         active_symbols = self.get_target_instruments()
         # Utiliser le symbole focus demandé par le client, sinon le premier actif
-        if not focus_symbol or focus_symbol not in [s.upper() for s in active_symbols]:
-            focus_symbol = active_symbols[0] if active_symbols else ""
-        else:
-            focus_symbol = next((s for s in active_symbols if s.upper() == focus_symbol.upper()), active_symbols[0] if active_symbols else "")
+        matched = next((s for s in active_symbols if s.upper() == focus_symbol.upper()), "") if focus_symbol else ""
+        focus_symbol = matched or (active_symbols[0] if active_symbols else "")
         market_status = self._get_market_status()
         live_snapshot = None
         if focus_symbol:
