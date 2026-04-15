@@ -106,7 +106,7 @@ class PaperBroker:
     def get_active_symbols(self, fallback: Optional[List[str]] = None) -> List[str]:
         return []
 
-    def get_market_status(self, symbols: Optional[List[str]] = None, max_tick_age_sec: int = 900) -> Dict:
+    def get_market_status(self, symbols: Optional[List[str]] = None, max_tick_age_sec: int = 3600) -> Dict:
         now = datetime.now(timezone.utc)
         scheduled = now.weekday() < 5
         return {
@@ -279,7 +279,7 @@ class MT5Broker:
 
         return ordered[:max_symbols]
 
-    def get_market_status(self, symbols: Optional[List[str]] = None, max_tick_age_sec: int = 900) -> Dict:
+    def get_market_status(self, symbols: Optional[List[str]] = None, max_tick_age_sec: int = 3600) -> Dict:
         self._ensure_ready()
         now = datetime.now(timezone.utc)
         candidates = list(symbols or self.get_active_symbols())
