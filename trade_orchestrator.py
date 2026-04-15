@@ -319,10 +319,10 @@ class TradeOrchestrator:
                 # pour éviter de rester bloqué en mode "rapide" pendant des heures.
                 use_full_llm = self.memory.get_llm_calls_today() < 2
             if use_full_llm:
-                decision = self.intelligence.analyze_signal(instrument, signal_h1, account, market_ctx)
+                decision = self.intelligence.analyze_signal(instrument, signal_h1, account, market_ctx, candles=candles_h1)
                 self.memory.log_session(f"🧠 {instrument}: validation complète par le LLM local")
             else:
-                decision = self.intelligence.analyze_signal(instrument, signal_h1, account, market_ctx, fast_mode=True)
+                decision = self.intelligence.analyze_signal(instrument, signal_h1, account, market_ctx, fast_mode=True, candles=candles_h1)
                 self.memory.log_session(f"⚡ {instrument}: décision rapide locale (règles + mémoire)")
             if not decision:
                 return
@@ -375,6 +375,7 @@ class TradeOrchestrator:
         direction = decision["decision"]
         atr = max(6, int(round(float(signal.get("atr_pips", 20) or 20))))
         raw_sl = int(decision.get("stop_loss_pips", atr) or atr)
+        # Use the LLM's structural SL if larger than ATR (structural = behind S/R level)
         sl_pips = max(atr, raw_sl)
         rr_ratio = max(1.5, tp_pips_raw / sl_pips if (tp_pips_raw := int(decision.get("take_profit_pips", sl_pips * 2) or sl_pips * 2)) and sl_pips else 2.0)
         tp_pips = max(sl_pips, int(sl_pips * rr_ratio))
@@ -386,15 +387,24 @@ class TradeOrchestrator:
         max_risk_pct = float(settings.get("max_risk_per_trade", MAX_RISK_PER_TRADE))
         risk_usd = max(0.5, balance * max_risk_pct * risk_multiplier)
 
-        # --- Money management: cap SL so actual risk stays within budget ---
+        # --- Money management: skip trade if SL can't be structural ---
         pip_value = getattr(self.broker, '_pip_value_per_lot', lambda x: 10.0)(instrument)
         vol_min = getattr(self.broker, '_volume_min', lambda x: 0.01)(instrument)
         min_risk_at_sl = vol_min * sl_pips * pip_value
         max_allowed_risk = balance * 0.05  # Hard cap 5% of balance
+        # Minimum acceptable SL = 50% of the structural SL (below that it's random)
+        min_acceptable_sl = max(int(atr * 0.5), int(sl_pips * 0.5))
 
         if min_risk_at_sl > risk_usd and min_risk_at_sl > max_allowed_risk:
-            # SL too wide for this capital at min volume → reduce SL, keep RR
+            # SL too wide for this capital at min volume → check if reduced SL is still viable
             new_sl = max(6, int(max_allowed_risk / max(0.001, vol_min * pip_value)))
+            if new_sl < min_acceptable_sl:
+                # Capital insufficient for a meaningful SL → skip trade entirely
+                self.memory.log_session(
+                    f"⛔ Skip {instrument}: SL structurel={sl_pips}p, capital ne permet que {new_sl}p "
+                    f"(min acceptable={min_acceptable_sl}p). Capital insuffisant."
+                )
+                return
             self.memory.log_session(
                 f"⚠️ Money mgmt: SL {sl_pips}→{new_sl}p (capital ${balance:.0f}, risque max ${max_allowed_risk:.2f})"
             )
@@ -554,7 +564,7 @@ class TradeOrchestrator:
         spread = self.broker.get_spread_pips(target)
         context = f"Mode test dashboard. Spread actuel: {spread:.1f} pips."
         # Le test IA du dashboard doit vérifier le moteur réel (LLM), pas uniquement le fallback rapide.
-        decision = self.intelligence.analyze_signal(target, signal, account, context, fast_mode=False)
+        decision = self.intelligence.analyze_signal(target, signal, account, context, fast_mode=False, candles=candles)
         ml_eval = self.ml_model.evaluate_signal(signal, spread)
         signal["ml_probability"] = ml_eval.get("probability", 0)
         if isinstance(decision, dict):

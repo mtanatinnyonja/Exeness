@@ -302,6 +302,116 @@ def build_human_analysis_summary(
     )
 
 
+def build_price_action_description(candles: List[Dict], instrument: str = "") -> str:
+    """Build a human-readable price action description from recent candles for the LLM."""
+    if len(candles) < 10:
+        return "Données insuffisantes pour une lecture price action."
+
+    pip_factor = _pip_factor_for(candles[-1]["close"], instrument)
+    recent = candles[-10:]
+    current = candles[-1]
+    prev = candles[-2]
+
+    lines = []
+
+    # 1. Describe the last 5 candles visually
+    candle_descs = []
+    for i, c in enumerate(candles[-5:]):
+        body = c["close"] - c["open"]
+        total = c["high"] - c["low"]
+        body_pips = round(abs(body) * pip_factor, 1)
+        total_pips = round(total * pip_factor, 1)
+        upper_wick = c["high"] - max(c["open"], c["close"])
+        lower_wick = min(c["open"], c["close"]) - c["low"]
+
+        if total == 0:
+            candle_descs.append("doji plat")
+            continue
+
+        color = "verte (hausse)" if body > 0 else "rouge (baisse)" if body < 0 else "doji"
+        body_ratio = abs(body) / total
+        upper_ratio = upper_wick / total
+        lower_ratio = lower_wick / total
+
+        if body_ratio < 0.1:
+            shape = "doji (indécision)"
+        elif body_ratio > 0.7:
+            shape = f"corps plein {body_pips}p"
+        elif lower_ratio > 0.5:
+            shape = f"marteau/pin bar bas {total_pips}p"
+        elif upper_ratio > 0.5:
+            shape = f"étoile filante {total_pips}p"
+        else:
+            shape = f"corps {body_pips}p, mèches {total_pips}p"
+
+        candle_descs.append(f"{color}, {shape}")
+
+    lines.append("5 dernières bougies: " + " → ".join(candle_descs))
+
+    # 2. Higher highs / lower lows structure
+    last_highs = [c["high"] for c in candles[-6:]]
+    last_lows = [c["low"] for c in candles[-6:]]
+    hh = all(last_highs[i] >= last_highs[i-1] for i in range(1, len(last_highs)))
+    hl = all(last_lows[i] >= last_lows[i-1] for i in range(1, len(last_lows)))
+    lh = all(last_highs[i] <= last_highs[i-1] for i in range(1, len(last_highs)))
+    ll = all(last_lows[i] <= last_lows[i-1] for i in range(1, len(last_lows)))
+
+    if hh and hl:
+        lines.append("Structure: Higher Highs + Higher Lows (tendance haussière)")
+    elif lh and ll:
+        lines.append("Structure: Lower Highs + Lower Lows (tendance baissière)")
+    elif not hh and not lh:
+        lines.append("Structure: pas de direction claire (consolidation/range)")
+    else:
+        lines.append("Structure: mixte, transition possible")
+
+    # 3. Rejection / absorption patterns on last 3 candles
+    for i in range(-3, 0):
+        if i + len(candles) < 0:
+            continue
+        c = candles[i]
+        body = abs(c["close"] - c["open"])
+        total = c["high"] - c["low"]
+        if total == 0:
+            continue
+        upper_wick = c["high"] - max(c["open"], c["close"])
+        lower_wick = min(c["open"], c["close"]) - c["low"]
+
+        if upper_wick > body * 2 and upper_wick > total * 0.45:
+            level = round(c["high"], 5)
+            lines.append(f"Rejet vendeur à {level} (longue mèche haute = pression vendeuse)")
+        if lower_wick > body * 2 and lower_wick > total * 0.45:
+            level = round(c["low"], 5)
+            lines.append(f"Rejet acheteur à {level} (longue mèche basse = pression acheteuse)")
+
+    # 4. Volume/size comparison
+    bodies = [abs(c["close"] - c["open"]) for c in candles[-10:]]
+    avg_body = sum(bodies) / len(bodies) if bodies else 0
+    last_body = abs(current["close"] - current["open"])
+    if avg_body > 0:
+        if last_body > avg_body * 1.8:
+            lines.append("Dernière bougie: corps anormalement grand (possible impulsion)")
+        elif last_body < avg_body * 0.3:
+            lines.append("Dernière bougie: corps très petit (hésitation/compression)")
+
+    # 5. Key levels interaction
+    closes = [c["close"] for c in candles]
+    highs_all = [c["high"] for c in candles]
+    lows_all = [c["low"] for c in candles]
+    resistance, support = calculate_support_resistance(highs_all[:-1], lows_all[:-1], window=40)
+    price = current["close"]
+    dist_sup = round((price - support) * pip_factor, 1)
+    dist_res = round((resistance - price) * pip_factor, 1)
+    lines.append(f"Support: {round(support,5)} ({dist_sup}p en dessous) | Résistance: {round(resistance,5)} ({dist_res}p au dessus)")
+
+    if dist_sup < dist_res * 0.3:
+        lines.append("Prix PROCHE du support → zone d'achat possible si rejet confirmé")
+    elif dist_res < dist_sup * 0.3:
+        lines.append("Prix PROCHE de la résistance → zone de vente possible si rejet confirmé")
+
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Score principal
 # ---------------------------------------------------------------------------

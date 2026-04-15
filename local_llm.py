@@ -24,7 +24,7 @@ from settings import (
 from runtime_db import RuntimeStore
 
 
-SYSTEM_PROMPT = """Tu es un analyste MT5 conservateur. Évalue le setup et réponds BUY, SELL ou WAIT en JSON strict. Priorité: préserver le capital."""
+SYSTEM_PROMPT = """Tu es un trader professionnel MT5. Analyse le marché comme un humain: structure des bougies, price action, zones de support/résistance, rejets de niveaux clés. Les indicateurs sont secondaires — la lecture du graphique est prioritaire. Réponds en JSON strict. Priorité: capital preservation, ne trade que si la structure est claire."""
 
 
 class LocalIntelligence:
@@ -230,23 +230,53 @@ class LocalIntelligence:
             self.memory.record_error("ollama", str(e))
             return None
 
-    def analyze_signal(self, instrument: str, signal: Dict, account_info: Dict, market_context: str = "", fast_mode: bool = False) -> Optional[Dict]:
+    def analyze_signal(self, instrument: str, signal: Dict, account_info: Dict, market_context: str = "", fast_mode: bool = False, candles: list = None) -> Optional[Dict]:
         self.refresh_runtime_settings()
         today_pnl = self.memory.get_daily_pnl()
         memory_context = self._compact_memory_context(self.memory.get_context_for_llm())
         spread = self._extract_spread(market_context)
 
-        details_compact = self._compact_details(signal.get('details', {}) or {})
+        # Build price action description if candles provided
+        price_action = ""
+        if candles and len(candles) >= 10:
+            from signal_engine import build_price_action_description
+            price_action = build_price_action_description(candles, instrument)
 
-        prompt = f"""Instrument: {instrument} | Dir: {signal.get('direction') or 'WAIT'} | Score: {signal.get('score')}/5 | Pattern: {signal.get('pattern')}
-ATR: {signal.get('atr_pips')} pips | Spread: {spread:.1f} pips
-Balance: {account_info.get('balance', INITIAL_CAPITAL):.0f} | PnL jour: {today_pnl:.2f} | Positions: {account_info.get('open_trades', 0)}
-Max risque: {MAX_RISK_PER_TRADE*100:.0f}% | Objectif: {DAILY_TARGET} | Limite: {DAILY_LOSS_LIMIT}
-Indicateurs: {json.dumps(details_compact, ensure_ascii=False)}
-Mémoire: {memory_context}
+        details = signal.get('details', {}) or {}
+        regime = details.get('market_regime', 'unknown')
+        rsi = details.get('rsi', 50)
+        support = details.get('support', 0)
+        resistance = details.get('resistance', 0)
+        rr_buy = details.get('rr_buy', 0)
+        rr_sell = details.get('rr_sell', 0)
+        atr_pips = signal.get('atr_pips', 0)
+        candle_pattern = details.get('candle_pattern', 'aucun')
+
+        prompt = f"""=== ANALYSE {instrument} ===
+
+STRUCTURE DU MARCHÉ (price action):
+{price_action or 'Non disponible'}
+
+CONTEXTE:
+- Régime: {regime} | RSI: {rsi} | Pattern bougie: {candle_pattern}
+- Support: {support} | Résistance: {resistance}
+- ATR: {atr_pips} pips | Spread: {spread:.1f} pips
+- RR achat: {rr_buy} | RR vente: {rr_sell}
+- {market_context}
+
+COMPTE: Balance {account_info.get('balance', 50):.0f}$ | PnL jour: {today_pnl:.2f}$ | Positions: {account_info.get('open_trades', 0)}
+MÉMOIRE: {memory_context}
+
+RÈGLES:
+- Trade UNIQUEMENT si la structure price action confirme (rejets, breakouts, patterns clairs)
+- Le SL doit être placé derrière un niveau structurel (support/résistance, mèche de rejet)
+- Minimum RR 1.5:1 sinon WAIT
+- En range sans pattern clair → WAIT
+- stop_loss_pips = distance en pips jusqu'au niveau structurel (pas juste ATR)
+- take_profit_pips = objectif basé sur le prochain niveau clé
 
 JSON uniquement:
-{{"decision":"BUY|SELL|WAIT","confidence":0.0-1.0,"stop_loss_pips":N,"take_profit_pips":N,"reasoning":"court","insight":"résumé"}}"""
+{{"decision":"BUY|SELL|WAIT","confidence":0.0-1.0,"stop_loss_pips":N,"take_profit_pips":N,"reasoning":"analyse price action courte","insight":"résumé"}}"""
 
         result = None
         if fast_mode:
