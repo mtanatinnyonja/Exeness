@@ -18,6 +18,7 @@ from signal_engine import calculate_signal_score, _MIN_CANDLES
 from local_llm import LocalIntelligence
 from runtime_db import RuntimeStore
 from ml_model import LocalSignalModel
+from economic_calendar import EconomicCalendar
 
 _status_rotation_idx = 0
 
@@ -29,6 +30,7 @@ class TradeOrchestrator:
         self.broker = build_broker()
         self.intelligence = LocalIntelligence(self.memory)
         self.ml_model = LocalSignalModel(self.store, self.broker)
+        self.calendar = EconomicCalendar()
         self.last_signal_time = {}
 
         if not quiet:
@@ -234,6 +236,15 @@ class TradeOrchestrator:
             self.memory.log_session(f"⏳ {instrument}: cooldown actif")
             return
 
+        # Filtre calendrier économique — pause avant/après high impact news
+        try:
+            news_check = self.calendar.should_pause_trading(instrument)
+            if news_check["pause"]:
+                self.memory.log_session(f"📰 {instrument}: PAUSE NEWS — {news_check['reason']}")
+                return
+        except Exception as cal_err:
+            self.memory.record_error("calendar", str(cal_err))
+
         try:
             # Demande suffisamment de bougies pour le warm-up des indicateurs
             candles_needed = max(120, _MIN_CANDLES + 10)
@@ -322,6 +333,13 @@ class TradeOrchestrator:
                 f"RiskReward buy={rr_buy:.2f}, sell={rr_sell:.2f}."
                 f"{learning_notes}"
             )
+            # Ajouter le contexte calendrier économique
+            try:
+                cal_ctx = self.calendar.get_context_for_llm(instrument)
+                if cal_ctx and "Pas d'événement" not in cal_ctx:
+                    market_ctx += f"\nCALENDRIER ÉCONOMIQUE:\n{cal_ctx}"
+            except Exception:
+                pass
             chosen_rr = rr_buy if direction == "BUY" else rr_sell if direction == "SELL" else max(rr_buy, rr_sell)
             use_full_llm = self._should_use_full_llm(instrument, signal_h1, spread, chosen_rr, min_signal_required)
             if not use_full_llm and direction in {"BUY", "SELL"} and score >= max(2, min_signal_required - 1):
@@ -673,4 +691,16 @@ class TradeOrchestrator:
             "runtime_mode": "local-only",
             "live_snapshot": live_snapshot,
             "last_ai_exchange": self.intelligence.get_last_exchange(),
+            "economic_calendar": self._get_calendar_summary(),
         }
+
+    def _get_calendar_summary(self) -> Dict:
+        try:
+            return {
+                "upcoming": self.calendar.get_dashboard_summary(),
+                "news_pause": self.calendar.should_pause_trading(
+                    self.get_target_instruments()[0] if self.get_target_instruments() else "EURUSD"
+                ),
+            }
+        except Exception:
+            return {"upcoming": [], "news_pause": {"pause": False, "reason": "", "events": []}}

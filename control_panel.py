@@ -668,6 +668,18 @@ HTML_PAGE = r"""<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- ECONOMIC CALENDAR -->
+  <div class="ai-exchange" style="margin-bottom:16px;" id="calendar-panel">
+    <div class="ai-exchange-header" onclick="toggleCalendar()">
+      <span class="panel-title">📰 Calendrier Économique</span>
+      <span id="news-pause-badge" style="display:none;background:#e74c3c;color:#fff;padding:2px 8px;border-radius:4px;font-size:0.75em;margin-left:8px;">⚠️ PAUSE NEWS</span>
+      <span class="toggle-arrow" id="calendar-arrow">▼</span>
+    </div>
+    <div class="ai-exchange-body" id="calendar-body">
+      <div id="calendar-events" style="color:var(--text);font-size:0.85em;">Chargement...</div>
+    </div>
+  </div>
+
   <!-- KPIs -->
   <div class="kpi-grid">
     <div class="kpi">
@@ -1024,6 +1036,48 @@ function toggleAiExchange() {
   arrow.classList.toggle('open', isOpen);
 }
 
+function toggleCalendar() {
+  const body = document.getElementById('calendar-body');
+  const arrow = document.getElementById('calendar-arrow');
+  const isOpen = body.classList.toggle('open');
+  arrow.classList.toggle('open', isOpen);
+}
+
+function renderCalendar(cal) {
+  if (!cal) return;
+  const container = document.getElementById('calendar-events');
+  const badge = document.getElementById('news-pause-badge');
+  if (cal.news_pause && cal.news_pause.pause) {
+    badge.style.display = 'inline';
+    badge.textContent = '⚠️ ' + (cal.news_pause.reason || 'PAUSE NEWS');
+  } else {
+    badge.style.display = 'none';
+  }
+  const events = cal.upcoming || [];
+  if (events.length === 0) {
+    container.innerHTML = '<div style="padding:8px;opacity:0.6;">Aucun événement majeur à venir.</div>';
+    return;
+  }
+  let html = '<table style="width:100%;border-collapse:collapse;font-size:0.82em;">';
+  html += '<tr style="border-bottom:1px solid rgba(255,255,255,0.1);"><th style="text-align:left;padding:4px 6px;">Heure</th><th style="text-align:left;padding:4px 6px;">Impact</th><th style="text-align:left;padding:4px 6px;">Devise</th><th style="text-align:left;padding:4px 6px;">Événement</th><th style="text-align:right;padding:4px 6px;">Dans</th></tr>';
+  events.forEach(ev => {
+    const impactColor = ev.impact === 'High' ? '#e74c3c' : ev.impact === 'Medium' ? '#f39c12' : '#7f8c8d';
+    const impactDot = '<span style="color:' + impactColor + ';font-weight:bold;">●</span>';
+    const mins = ev.minutes_to || 0;
+    const timeStr = mins > 60 ? Math.floor(mins/60) + 'h' + (mins%60 < 10 ? '0' : '') + (mins%60) + 'm' : mins + 'min';
+    const sign = mins < 0 ? '(passé)' : timeStr;
+    html += '<tr style="border-bottom:1px solid rgba(255,255,255,0.05);">';
+    html += '<td style="padding:3px 6px;">' + (ev.time_utc || '') + '</td>';
+    html += '<td style="padding:3px 6px;">' + impactDot + ' ' + ev.impact + '</td>';
+    html += '<td style="padding:3px 6px;font-weight:bold;">' + (ev.country || '') + '</td>';
+    html += '<td style="padding:3px 6px;">' + (ev.title || '') + '</td>';
+    html += '<td style="padding:3px 6px;text-align:right;opacity:0.7;">' + sign + '</td>';
+    html += '</tr>';
+  });
+  html += '</table>';
+  container.innerHTML = html;
+}
+
 function renderAiExchange(exchange) {
   if (!exchange || !exchange.prompt) return;
   document.getElementById('ai-ex-instrument').textContent = exchange.instrument || '—';
@@ -1115,6 +1169,7 @@ async function fetchStatus() {
     syncFocusPairs(data.active_symbols || []);
     renderAiChart(data);
     if (data.last_ai_exchange && data.last_ai_exchange.prompt) renderAiExchange(data.last_ai_exchange);
+    if (data.economic_calendar) renderCalendar(data.economic_calendar);
 
     // Live snapshot rotation: show chart even before first AI call
     if (data.live_snapshot && data.live_snapshot.closes) {
