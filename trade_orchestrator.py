@@ -39,6 +39,7 @@ class TradeOrchestrator:
         self.calendar = EconomicCalendar()
         self.telegram = TelegramNotifier()
         self.last_signal_time = {}
+        self._last_scan = {"mode": "unknown", "candidates": [], "rejected": [], "selected": []}
 
         if not quiet:
             self.memory.log_session(
@@ -180,12 +181,15 @@ class TradeOrchestrator:
             self.memory.record_error("symbols", str(e))
 
         if not visible:
+            self._last_scan = {"mode": "fallback", "candidates": [], "rejected": [], "selected": list(INSTRUMENTS)[:max_symbols]}
             return list(INSTRUMENTS)[:max_symbols]
 
         # Mode "preferred" = ancien mode, filtre strict statique
         if selection_mode == "preferred" and preferred:
             filtered = [s for s in visible if any(s.upper() == p.upper() for p in preferred)]
-            return filtered[:max_symbols] if filtered else visible[:max_symbols]
+            result = filtered[:max_symbols] if filtered else visible[:max_symbols]
+            self._last_scan = {"mode": "preferred", "candidates": [], "rejected": [], "selected": result}
+            return result
 
         # Mode "smart" = scan silencieux de toutes les paires, filtre par spread
         return self._smart_scan_instruments(visible, preferred, max_symbols)
@@ -197,12 +201,19 @@ class TradeOrchestrator:
         Les preferred_symbols sont prioritaires mais pas exclusifs.
         """
         candidates = []
+        rejected = []
         for symbol in visible:
             try:
                 spread = self.broker.get_spread_pips(symbol)
                 max_spread = self._max_spread_allowed(symbol)
                 if spread > max_spread:
-                    continue  # Spread trop cher → skip silencieusement
+                    rejected.append({
+                        "symbol": symbol,
+                        "spread": round(spread, 2),
+                        "max_spread": round(max_spread, 1),
+                        "reason": f"Spread {spread:.1f} > max {max_spread:.1f}",
+                    })
+                    continue
 
                 # Score de priorité: spread bas = meilleur
                 spread_ratio = spread / max(0.1, max_spread)  # 0 = parfait, 1 = limite
@@ -214,16 +225,40 @@ class TradeOrchestrator:
                 # Bonus pour paires majeures connues (plus liquides)
                 name_upper = symbol.upper().replace("M", "").replace(".", "")
                 majors = {"EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "XAUUSD"}
-                if any(m in name_upper for m in majors):
+                is_major = any(m in name_upper for m in majors)
+                if is_major:
                     priority += 0.2
 
-                candidates.append((symbol, spread, priority))
+                tags = []
+                if is_preferred:
+                    tags.append("preferred")
+                if is_major:
+                    tags.append("major")
+
+                candidates.append({
+                    "symbol": symbol,
+                    "spread": round(spread, 2),
+                    "max_spread": round(max_spread, 1),
+                    "priority": round(priority, 3),
+                    "spread_pct": round(spread_ratio * 100, 1),
+                    "tags": tags,
+                })
             except Exception:
                 continue  # Paire non-tradeable, on skip
 
         # Trier par priorité descendante
-        candidates.sort(key=lambda x: x[2], reverse=True)
-        selected = [c[0] for c in candidates[:max_symbols]]
+        candidates.sort(key=lambda x: x["priority"], reverse=True)
+        selected = [c["symbol"] for c in candidates[:max_symbols]]
+
+        # Stocker les détails du scan pour le dashboard
+        self._last_scan = {
+            "mode": "smart",
+            "total_visible": len(visible + rejected),
+            "candidates": candidates,
+            "rejected": rejected,
+            "selected": selected,
+        }
+
         return selected
 
     def run_cycle(self):
@@ -901,6 +936,7 @@ class TradeOrchestrator:
             "economic_calendar": self._get_calendar_summary(),
             "pro_strategies": self._get_strategies_summary(active_symbols, positions),
             "market_protections": self._get_protections_summary(active_symbols),
+            "smart_scan": self._last_scan,
         }
 
     def _get_calendar_summary(self) -> Dict:

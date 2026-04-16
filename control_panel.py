@@ -510,6 +510,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
         <div class="kpi-sub" id="ml-info">samples</div>
       </div>
     </div>
+    <div id="features-bar" style="display:flex;gap:6px;flex-wrap:wrap;padding:8px 16px 12px;border-top:1px solid var(--border);"></div>
   </div>
 
   <div class="panel" style="margin-bottom:16px;">
@@ -667,6 +668,28 @@ HTML_PAGE = r"""<!DOCTYPE html>
         <button class="btn" onclick="testTelegram()">Tester Telegram</button>
         <span class="refresh-info" id="tg-test-result"></span>
       </div>
+    </div>
+  </div>
+
+  <!-- SMART PAIR SCANNER -->
+  <div class="ai-exchange" style="margin-bottom:16px;" id="scanner-panel">
+    <div class="ai-exchange-header" onclick="toggleScanner()">
+      <span class="panel-title">🔍 Scanner de Paires Dynamique</span>
+      <span id="scanner-badge" style="padding:2px 8px;border-radius:4px;font-size:0.75em;margin-left:8px;background:var(--accent);color:#fff;">—</span>
+      <span class="toggle-arrow" id="scanner-arrow">▼</span>
+    </div>
+    <div class="ai-exchange-body" id="scanner-body">
+      <div style="display:flex;gap:16px;margin-bottom:10px;">
+        <div style="flex:1;">
+          <div style="color:var(--green);font-weight:600;margin-bottom:8px;">✅ Paires Sélectionnées</div>
+          <div id="scan-selected" style="font-size:0.85em;">—</div>
+        </div>
+        <div style="flex:1;">
+          <div style="color:var(--red);font-weight:600;margin-bottom:8px;">❌ Paires Rejetées (spread)</div>
+          <div id="scan-rejected" style="font-size:0.85em;color:var(--muted);">—</div>
+        </div>
+      </div>
+      <div id="scan-table-wrap" style="max-height:260px;overflow-y:auto;"></div>
     </div>
   </div>
 
@@ -1241,6 +1264,97 @@ function renderStrategies(strat) {
   }
 }
 
+function toggleScanner() {
+  const body = document.getElementById('scanner-body');
+  const arrow = document.getElementById('scanner-arrow');
+  if (body.style.display === 'none') { body.style.display = 'block'; arrow.textContent = '▼'; }
+  else { body.style.display = 'none'; arrow.textContent = '▶'; }
+}
+
+function renderScanner(scan) {
+  if (!scan) return;
+  const badge = document.getElementById('scanner-badge');
+  const mode = scan.mode || 'unknown';
+  const selected = scan.selected || [];
+  const candidates = scan.candidates || [];
+  const rejected = scan.rejected || [];
+
+  // Badge
+  if (mode === 'smart') {
+    badge.style.background = 'var(--accent)';
+    badge.textContent = 'SMART · ' + selected.length + ' paires';
+  } else if (mode === 'preferred') {
+    badge.style.background = '#f39c12'; badge.style.color = '#000';
+    badge.textContent = 'STATIQUE · ' + selected.length + ' paires';
+  } else {
+    badge.textContent = mode;
+  }
+
+  // Selected pairs
+  const selDiv = document.getElementById('scan-selected');
+  if (candidates.length > 0) {
+    const selCandidates = candidates.filter(c => selected.includes(c.symbol));
+    selDiv.innerHTML = selCandidates.map(c => {
+      const tags = (c.tags || []).map(t =>
+        '<span style="padding:1px 5px;border-radius:3px;font-size:0.7em;' +
+        (t === 'major' ? 'background:#2a5d96;color:#8fc' : 'background:#5d2a96;color:#c8f') + ';">' + t + '</span>'
+      ).join(' ');
+      const pctColor = c.spread_pct < 30 ? 'var(--green)' : c.spread_pct < 60 ? 'var(--amber)' : 'var(--red)';
+      return '<div style="display:flex;align-items:center;gap:8px;padding:3px 0;border-bottom:1px solid var(--border);">' +
+        '<strong style="min-width:90px;">' + c.symbol + '</strong>' +
+        '<span style="color:' + pctColor + ';">' + c.spread + 'p</span>' +
+        '<span style="color:var(--muted);font-size:0.8em;">(' + c.spread_pct + '% du max)</span>' +
+        '<span style="color:var(--accent);font-size:0.8em;">★ ' + c.priority.toFixed(2) + '</span>' +
+        tags + '</div>';
+    }).join('');
+  } else {
+    selDiv.innerHTML = selected.length > 0
+      ? selected.map(s => '<span style="margin-right:6px;">' + s + '</span>').join('')
+      : '<span style="color:var(--muted);">Aucune paire sélectionnée</span>';
+  }
+
+  // Rejected pairs
+  const rejDiv = document.getElementById('scan-rejected');
+  if (rejected.length > 0) {
+    rejDiv.innerHTML = rejected.map(r =>
+      '<div style="padding:2px 0;font-size:0.82em;">' +
+      '<span style="min-width:90px;display:inline-block;">' + r.symbol + '</span> ' +
+      '<span style="color:var(--red);">' + r.spread + 'p > ' + r.max_spread + 'p</span></div>'
+    ).join('');
+  } else {
+    rejDiv.innerHTML = '<span style="color:var(--green);">Aucune paire rejetée</span>';
+  }
+
+  // Full table
+  const tableWrap = document.getElementById('scan-table-wrap');
+  if (candidates.length > 0) {
+    let rows = candidates.map((c, i) => {
+      const isSel = selected.includes(c.symbol);
+      const bg = isSel ? 'rgba(124,106,247,0.08)' : '';
+      const pctColor = c.spread_pct < 30 ? 'var(--green)' : c.spread_pct < 60 ? 'var(--amber)' : 'var(--red)';
+      return '<tr style="background:' + bg + ';">' +
+        '<td style="padding:4px 8px;color:var(--text);">' + (i + 1) + '</td>' +
+        '<td style="padding:4px 8px;font-weight:600;">' + c.symbol + (isSel ? ' ✅' : '') + '</td>' +
+        '<td style="padding:4px 8px;color:' + pctColor + ';">' + c.spread + '</td>' +
+        '<td style="padding:4px 8px;color:var(--muted);">' + c.max_spread + '</td>' +
+        '<td style="padding:4px 8px;color:var(--accent);">' + c.priority.toFixed(3) + '</td>' +
+        '<td style="padding:4px 8px;color:' + pctColor + ';">' + c.spread_pct + '%</td>' +
+        '<td style="padding:4px 8px;">' + (c.tags || []).join(', ') + '</td></tr>';
+    }).join('');
+    tableWrap.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:0.82em;">' +
+      '<thead><tr style="border-bottom:1px solid var(--border2);color:var(--muted);">' +
+      '<th style="padding:4px 8px;text-align:left;">#</th>' +
+      '<th style="padding:4px 8px;text-align:left;">Paire</th>' +
+      '<th style="padding:4px 8px;text-align:left;">Spread</th>' +
+      '<th style="padding:4px 8px;text-align:left;">Max</th>' +
+      '<th style="padding:4px 8px;text-align:left;">Priorité</th>' +
+      '<th style="padding:4px 8px;text-align:left;">Spread %</th>' +
+      '<th style="padding:4px 8px;text-align:left;">Tags</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  } else {
+    tableWrap.innerHTML = '';
+  }
+}
+
 function toggleProtections() {
   const body = document.getElementById('protections-body');
   const arrow = document.getElementById('protections-arrow');
@@ -1391,9 +1505,19 @@ async function fetchStatus() {
     }
 
     // Config active
-    document.getElementById('symbol-mode').textContent = data.settings?.symbol_source_mode || '—';
+    const scanMode = data.settings?.symbol_selection_mode || data.smart_scan?.mode || '—';
+    const scanLabel = scanMode === 'smart' ? '🔍 smart scan' : scanMode === 'preferred' ? '📌 statique' : scanMode;
+    document.getElementById('symbol-mode').textContent = scanLabel;
     document.getElementById('ai-provider').textContent = data.ai_provider || '—';
-    document.getElementById('active-symbols').textContent = (data.active_symbols || []).join(', ') || '—';
+    const symList = data.active_symbols || [];
+    const scanInfo = data.smart_scan || {};
+    const rejCount = (scanInfo.rejected || []).length;
+    const candCount = (scanInfo.candidates || []).length;
+    let symText = symList.join(', ') || '—';
+    if (scanMode === 'smart' && (candCount || rejCount)) {
+      symText += ' (' + candCount + ' analysées, ' + rejCount + ' rejetées)';
+    }
+    document.getElementById('active-symbols').textContent = symText;
     populateSettings(data);
     const allowTrade = String(data.settings?.allow_trade_execution || false) === 'true';
     const modeNote = document.getElementById('ai-mode-note');
@@ -1403,11 +1527,35 @@ async function fetchStatus() {
         : 'Le bot autonome analyse la paire active en continu. Active le trading réel démo pour autoriser les ouvertures et fermetures automatiques.';
     }
     syncFocusPairs(data.active_symbols || []);
+
+    // Features bar
+    const fb = document.getElementById('features-bar');
+    if (fb) {
+      const features = [
+        {label: '🔍 Smart Scan', on: (data.settings?.symbol_selection_mode || 'smart') === 'smart'},
+        {label: '📱 Telegram', on: String(data.settings?.telegram_enabled ?? true) === 'true'},
+        {label: '🛡️ Protections', on: true},
+        {label: '📰 Calendrier', on: true},
+        {label: '🎯 Stratégies Pro', on: true},
+        {label: '🧠 ML Local', on: (data.ml_model_state?.sample_count || 0) > 0},
+        {label: '💧 Liquidity Sweep', on: !!data.market_protections?.liquidity_sweep},
+        {label: '📐 BOS/CHoCH', on: !!(data.market_protections?.bos || data.market_protections?.choch)},
+        {label: allowTrade ? '✅ Trading Actif' : '⏸️ Paper Mode', on: allowTrade},
+      ];
+      fb.innerHTML = features.map(f =>
+        '<span style="padding:2px 8px;border-radius:4px;font-size:0.72em;font-weight:500;' +
+        (f.on ? 'background:rgba(61,255,160,0.12);color:var(--green);border:1px solid rgba(61,255,160,0.2);'
+              : 'background:rgba(255,255,255,0.04);color:var(--muted);border:1px solid var(--border);') +
+        '">' + f.label + '</span>'
+      ).join('');
+    }
+
     renderAiChart(data);
     if (data.last_ai_exchange && data.last_ai_exchange.prompt) renderAiExchange(data.last_ai_exchange);
     if (data.economic_calendar) renderCalendar(data.economic_calendar);
     if (data.pro_strategies) renderStrategies(data.pro_strategies);
     if (data.market_protections) renderProtections(data.market_protections);
+    if (data.smart_scan) renderScanner(data.smart_scan);
 
     // Live snapshot rotation: show chart even before first AI call
     if (data.live_snapshot && data.live_snapshot.closes) {
