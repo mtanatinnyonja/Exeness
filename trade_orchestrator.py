@@ -19,6 +19,10 @@ from local_llm import LocalIntelligence
 from runtime_db import RuntimeStore
 from ml_model import LocalSignalModel
 from economic_calendar import EconomicCalendar
+from smart_strategies import (
+    get_session_score, calculate_htf_bias, get_smart_money_context,
+    calculate_trail_levels, check_correlation_risk, build_strategies_context,
+)
 
 _status_rotation_idx = 0
 
@@ -245,6 +249,17 @@ class TradeOrchestrator:
         except Exception as cal_err:
             self.memory.record_error("calendar", str(cal_err))
 
+        # Filtre session / Kill Zone (ICT)
+        try:
+            session_info = get_session_score(instrument)
+            if session_info["instrument_quality"] < 0.2:
+                self.memory.log_session(f"🕐 {instrument}: session morte ({session_info['label']}) — skip")
+                return
+            self.memory.log_session(f"🕐 {instrument}: {session_info['label']} (qualité={session_info['instrument_quality']})")
+        except Exception as sess_err:
+            session_info = {"label": "?", "instrument_quality": 0.5, "is_kill_zone": False}
+            self.memory.record_error("session", str(sess_err))
+
         try:
             # Demande suffisamment de bougies pour le warm-up des indicateurs
             candles_needed = max(120, _MIN_CANDLES + 10)
@@ -317,6 +332,57 @@ class TradeOrchestrator:
                     self.memory.log_session(f"⚠️ {instrument}: ML proba faible ({ml_prob:.2f}) mais données insuffisantes ({inst_samples} samples) → on continue")
 
             self.last_signal_time[instrument] = datetime.utcnow()
+
+            # ── Stratégies professionnelles avancées ──
+            try:
+                candles_h4 = self.broker.get_candles(instrument, "H4", 60)
+                candles_d1 = self.broker.get_candles(instrument, "D1", 30)
+            except Exception:
+                candles_h4, candles_d1 = [], []
+
+            try:
+                pro_ctx = build_strategies_context(
+                    instrument, candles_h1, candles_h4, candles_d1,
+                    signal_direction=direction, signal_score=score,
+                    open_positions=self.broker.get_open_positions(),
+                )
+                htf_bias = pro_ctx["htf_bias"]
+                confluence = pro_ctx["confluence"]
+                correlation = pro_ctx["correlation"]
+                smc = pro_ctx["smart_money"]
+
+                # Log confluence
+                self.memory.log_session(
+                    f"🎯 {instrument}: Confluence={confluence['confluence_score']}/{confluence['max_score']} "
+                    f"({confluence['quality']}) | HTF={htf_bias.get('combined_bias', '?')} "
+                    f"| SMC={smc.get('smart_money_bias', '?')} ({smc.get('fvg_count', 0)} FVG, {smc.get('ob_count', 0)} OB)"
+                )
+
+                # Bloquer si corrélation trop forte
+                if correlation["blocked"]:
+                    self.memory.log_session(f"🔗 {instrument}: BLOQUÉ corrélation — {correlation['reason']}")
+                    return
+                if correlation["warnings"]:
+                    self.memory.log_session(f"🔗 {instrument}: {correlation['warnings'][0]}")
+
+                # Bloquer si confluence D (très mauvaise) ET pas en kill zone
+                if confluence["quality"] == "D" and not session_info.get("is_kill_zone", False):
+                    self.memory.log_session(
+                        f"🛡️ {instrument}: confluence trop faible ({confluence['quality']}) hors kill zone — skip"
+                    )
+                    self.store.record_signal_sample(instrument, signal_h1, spread, {
+                        "decision": "WAIT", "confidence": 0.0,
+                        "reasoning": f"Confluence {confluence['quality']}, hors kill zone",
+                    })
+                    return
+
+                pro_llm_context = pro_ctx["llm_context"]
+            except Exception as strat_err:
+                self.memory.record_error("strategies", str(strat_err))
+                pro_llm_context = ""
+                confluence = {"confluence_score": 0, "quality": "?", "max_score": 5}
+                htf_bias = {}
+
             learning_notes = ""
             if learning["reasons"]:
                 learning_notes = f" MÉMOIRE ALERTE: {', '.join(learning['reasons'])}. Risque ajusté ×{learning['risk_multiplier']:.2f}."
@@ -333,6 +399,9 @@ class TradeOrchestrator:
                 f"RiskReward buy={rr_buy:.2f}, sell={rr_sell:.2f}."
                 f"{learning_notes}"
             )
+            # Ajouter le contexte stratégies pro
+            if pro_llm_context:
+                market_ctx += f"\nSTRATÉGIES PRO:\n{pro_llm_context}"
             # Ajouter le contexte calendrier économique
             try:
                 cal_ctx = self.calendar.get_context_for_llm(instrument)
@@ -555,9 +624,50 @@ class TradeOrchestrator:
         for pos in positions:
             upnl = float(pos.get("unrealized_pnl", 0))
             emoji = "📈" if upnl >= 0 else "📉"
+            instrument = pos.get("instrument", "")
+            direction = str(pos.get("direction", "")).upper()
             self.memory.log_session(
-                f"{emoji} Position {pos.get('instrument')} {pos.get('direction')}: P&L non réalisé = ${upnl:.2f}"
+                f"{emoji} Position {instrument} {direction}: P&L non réalisé = ${upnl:.2f}"
             )
+
+            # Trailing stop / break-even management
+            try:
+                entry = float(pos.get("entry_price") or pos.get("open_price") or 0)
+                current = float(pos.get("current_price") or 0)
+                ticket = pos.get("ticket")
+                if not entry or not current or not ticket or not direction:
+                    continue
+
+                candles = self.broker.get_candles(instrument, PRIMARY_TIMEFRAME, 20)
+                from signal_engine import calculate_atr
+                atr = calculate_atr(candles) if len(candles) >= 15 else 0
+                pip_size = self.broker._pip_size(instrument) if hasattr(self.broker, '_pip_size') else 0.0001
+
+                if atr > 0:
+                    sl_pips = float(pos.get("sl_pips", 0) or 0)
+                    trail = calculate_trail_levels(direction, entry, current, atr, sl_pips, pip_size)
+
+                    if trail["action"] != "hold" and trail.get("new_sl"):
+                        # Vérifie que le nouveau SL est meilleur que l'ancien
+                        old_sl = float(pos.get("stop_loss") or 0)
+                        new_sl = trail["new_sl"]
+                        better = (direction == "BUY" and new_sl > old_sl) or \
+                                 (direction == "SELL" and (old_sl == 0 or new_sl < old_sl))
+
+                        if better and hasattr(self.broker, 'modify_position'):
+                            try:
+                                self.broker.modify_position(ticket, new_sl=new_sl)
+                                self.memory.log_session(
+                                    f"🔄 {instrument}: {trail['reason']} (SL {old_sl:.5f} → {new_sl:.5f})"
+                                )
+                            except Exception as mod_err:
+                                self.memory.record_error("trailing", str(mod_err))
+                        elif better:
+                            self.memory.log_session(
+                                f"📋 {instrument}: trail recommandé — {trail['reason']}"
+                            )
+            except Exception as trail_err:
+                self.memory.record_error("trailing", f"{instrument}: {trail_err}")
 
     def _close_all_positions(self, positions: List[Dict], reason: str):
         for pos in positions:
@@ -692,6 +802,7 @@ class TradeOrchestrator:
             "live_snapshot": live_snapshot,
             "last_ai_exchange": self.intelligence.get_last_exchange(),
             "economic_calendar": self._get_calendar_summary(),
+            "pro_strategies": self._get_strategies_summary(active_symbols, positions),
         }
 
     def _get_calendar_summary(self) -> Dict:
@@ -704,3 +815,42 @@ class TradeOrchestrator:
             }
         except Exception:
             return {"upcoming": [], "news_pause": {"pause": False, "reason": "", "events": []}}
+
+    def _get_strategies_summary(self, symbols: List[str], positions: List[Dict]) -> Dict:
+        try:
+            session = get_session_score(symbols[0] if symbols else "EURUSD")
+            # HTF bias for the first active symbol
+            target = symbols[0] if symbols else None
+            htf = {}
+            smc_summary = {}
+            if target:
+                try:
+                    c_h4 = self.broker.get_candles(target, "H4", 60)
+                    c_d1 = self.broker.get_candles(target, "D1", 30)
+                    htf = calculate_htf_bias(c_h4, c_d1)
+                    c_h1 = self.broker.get_candles(target, PRIMARY_TIMEFRAME, 120)
+                    smc_summary = get_smart_money_context(c_h1, target)
+                except Exception:
+                    pass
+            return {
+                "session": session,
+                "htf_bias": {
+                    "h4": htf.get("h4_bias", "?"),
+                    "d1": htf.get("d1_bias", "?"),
+                    "combined": htf.get("combined_bias", "?"),
+                    "trade_with": htf.get("trade_with"),
+                    "context": htf.get("context", ""),
+                },
+                "smart_money": {
+                    "fvg_count": smc_summary.get("fvg_count", 0),
+                    "ob_count": smc_summary.get("ob_count", 0),
+                    "bias": smc_summary.get("smart_money_bias", "neutral"),
+                    "zones": smc_summary.get("zones_text", ""),
+                },
+                "open_correlations": [
+                    check_correlation_risk(s, "BUY", positions)
+                    for s in symbols[:3]
+                ] if positions else [],
+            }
+        except Exception:
+            return {"session": {}, "htf_bias": {}, "smart_money": {}, "open_correlations": []}

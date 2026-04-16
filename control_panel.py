@@ -680,6 +680,39 @@ HTML_PAGE = r"""<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- PRO STRATEGIES -->
+  <div class="ai-exchange" style="margin-bottom:16px;" id="strategies-panel">
+    <div class="ai-exchange-header" onclick="toggleStrategies()">
+      <span class="panel-title">🎯 Stratégies Pro</span>
+      <span id="session-badge" style="padding:2px 8px;border-radius:4px;font-size:0.75em;margin-left:8px;"></span>
+      <span class="toggle-arrow" id="strategies-arrow">▼</span>
+    </div>
+    <div class="ai-exchange-body" id="strategies-body">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <!-- Session / Kill Zone -->
+        <div style="background:rgba(255,255,255,0.03);padding:10px;border-radius:8px;">
+          <div style="color:var(--amber);font-weight:600;margin-bottom:6px;">🕐 Session</div>
+          <div id="strat-session" style="color:var(--text);font-size:0.85em;">—</div>
+        </div>
+        <!-- HTF Bias -->
+        <div style="background:rgba(255,255,255,0.03);padding:10px;border-radius:8px;">
+          <div style="color:var(--amber);font-weight:600;margin-bottom:6px;">📊 HTF Bias (H4/D1)</div>
+          <div id="strat-htf" style="color:var(--text);font-size:0.85em;">—</div>
+        </div>
+        <!-- Smart Money -->
+        <div style="background:rgba(255,255,255,0.03);padding:10px;border-radius:8px;">
+          <div style="color:var(--amber);font-weight:600;margin-bottom:6px;">🏦 Smart Money (ICT)</div>
+          <div id="strat-smc" style="color:var(--text);font-size:0.85em;">—</div>
+        </div>
+        <!-- Corrélation -->
+        <div style="background:rgba(255,255,255,0.03);padding:10px;border-radius:8px;">
+          <div style="color:var(--amber);font-weight:600;margin-bottom:6px;">🔗 Corrélation</div>
+          <div id="strat-corr" style="color:var(--text);font-size:0.85em;">—</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- KPIs -->
   <div class="kpi-grid">
     <div class="kpi">
@@ -1078,6 +1111,69 @@ function renderCalendar(cal) {
   container.innerHTML = html;
 }
 
+function toggleStrategies() {
+  const body = document.getElementById('strategies-body');
+  const arrow = document.getElementById('strategies-arrow');
+  const isOpen = body.classList.toggle('open');
+  arrow.classList.toggle('open', isOpen);
+}
+
+function renderStrategies(strat) {
+  if (!strat) return;
+  const sessionBadge = document.getElementById('session-badge');
+  const sess = strat.session || {};
+  if (sess.label) {
+    const q = sess.instrument_quality || 0;
+    const color = q >= 0.7 ? '#00e676' : q >= 0.4 ? '#f39c12' : '#e74c3c';
+    sessionBadge.style.background = color;
+    sessionBadge.style.color = '#000';
+    sessionBadge.textContent = sess.label + ' (' + Math.round(q * 100) + '%)';
+  }
+  // Session
+  const sessDiv = document.getElementById('strat-session');
+  if (sess.label) {
+    const kz = sess.is_kill_zone ? '✅ KILL ZONE' : '⏳ Hors Kill Zone';
+    sessDiv.innerHTML = '<strong>' + sess.label + '</strong><br>' + kz +
+      '<br>Qualité: <strong>' + Math.round((sess.instrument_quality || 0) * 100) + '%</strong>' +
+      '<br><span style="opacity:0.7;">' + (sess.recommendation || '') + '</span>';
+  }
+  // HTF Bias
+  const htfDiv = document.getElementById('strat-htf');
+  const htf = strat.htf_bias || {};
+  if (htf.combined) {
+    const biasColor = htf.combined === 'bullish' ? '#00e676' : htf.combined === 'bearish' ? '#e74c3c' : htf.combined === 'conflict' ? '#f39c12' : '#888';
+    const arrow = htf.trade_with === 'BUY' ? '↑' : htf.trade_with === 'SELL' ? '↓' : '↔';
+    htfDiv.innerHTML = 'H4: <strong style="color:' + biasColor + '">' + (htf.h4 || '?') + '</strong> | ' +
+      'D1: <strong style="color:' + biasColor + '">' + (htf.d1 || '?') + '</strong><br>' +
+      'Combiné: <strong style="color:' + biasColor + '">' + arrow + ' ' + (htf.combined || '?') + '</strong>' +
+      (htf.trade_with ? '<br>Trader: <strong>' + htf.trade_with + '</strong>' : '') +
+      '<br><span style="opacity:0.7;">' + (htf.context || '') + '</span>';
+  }
+  // Smart Money
+  const smcDiv = document.getElementById('strat-smc');
+  const smc = strat.smart_money || {};
+  const smcBias = smc.bias || 'neutral';
+  const smcColor = smcBias === 'bullish' ? '#00e676' : smcBias === 'bearish' ? '#e74c3c' : '#888';
+  smcDiv.innerHTML = 'FVG: <strong>' + (smc.fvg_count || 0) + '</strong> | ' +
+    'Order Blocks: <strong>' + (smc.ob_count || 0) + '</strong><br>' +
+    'Biais: <strong style="color:' + smcColor + '">' + smcBias + '</strong><br>' +
+    '<span style="opacity:0.7;font-size:0.85em;">' + (smc.zones || 'Aucune zone active') + '</span>';
+  // Corrélation
+  const corrDiv = document.getElementById('strat-corr');
+  const corrs = strat.open_correlations || [];
+  if (corrs.length === 0) {
+    corrDiv.innerHTML = '<span style="color:#00e676;">✅ Pas de risque de corrélation</span>';
+  } else {
+    let corrHtml = '';
+    corrs.forEach(c => {
+      if (c.blocked) corrHtml += '<div style="color:#e74c3c;">🚫 ' + c.reason + '</div>';
+      else if (c.warnings && c.warnings.length) corrHtml += '<div style="color:#f39c12;">' + c.warnings[0] + '</div>';
+      else corrHtml += '<div style="color:#00e676;">✅ OK</div>';
+    });
+    corrDiv.innerHTML = corrHtml;
+  }
+}
+
 function renderAiExchange(exchange) {
   if (!exchange || !exchange.prompt) return;
   document.getElementById('ai-ex-instrument').textContent = exchange.instrument || '—';
@@ -1170,6 +1266,7 @@ async function fetchStatus() {
     renderAiChart(data);
     if (data.last_ai_exchange && data.last_ai_exchange.prompt) renderAiExchange(data.last_ai_exchange);
     if (data.economic_calendar) renderCalendar(data.economic_calendar);
+    if (data.pro_strategies) renderStrategies(data.pro_strategies);
 
     // Live snapshot rotation: show chart even before first AI call
     if (data.live_snapshot && data.live_snapshot.closes) {
