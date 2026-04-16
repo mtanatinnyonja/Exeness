@@ -23,6 +23,7 @@ from smart_strategies import (
     get_session_score, calculate_htf_bias, get_smart_money_context,
     calculate_trail_levels, check_correlation_risk, build_strategies_context,
 )
+from telegram_notifier import TelegramNotifier
 
 _status_rotation_idx = 0
 
@@ -35,6 +36,7 @@ class TradeOrchestrator:
         self.intelligence = LocalIntelligence(self.memory)
         self.ml_model = LocalSignalModel(self.store, self.broker)
         self.calendar = EconomicCalendar()
+        self.telegram = TelegramNotifier()
         self.last_signal_time = {}
 
         if not quiet:
@@ -44,6 +46,14 @@ class TradeOrchestrator:
             broker_note = getattr(self.broker, "status_message", "") or getattr(self.broker, "last_error", "")
             if broker_note:
                 self.memory.log_session(f"🔌 {broker_note}")
+            try:
+                self.telegram.notify_bot_started(
+                    getattr(self.broker, 'name', 'unknown'),
+                    self.intelligence.provider,
+                    self.get_target_instruments(),
+                )
+            except Exception:
+                pass
 
     def _get_market_status(self) -> Dict:
         try:
@@ -159,6 +169,7 @@ class TradeOrchestrator:
         settings = self.store.get_settings()
         max_symbols = int(settings.get("max_symbols_per_cycle", 10))
         preferred = settings.get("preferred_symbols") or []
+        selection_mode = str(settings.get("symbol_selection_mode", "smart")).lower()
 
         visible = []
         try:
@@ -170,12 +181,49 @@ class TradeOrchestrator:
         if not visible:
             return list(INSTRUMENTS)[:max_symbols]
 
-        # preferred_symbols = filtre strict (uniquement les paires en graphique)
-        if preferred:
+        # Mode "preferred" = ancien mode, filtre strict statique
+        if selection_mode == "preferred" and preferred:
             filtered = [s for s in visible if any(s.upper() == p.upper() for p in preferred)]
             return filtered[:max_symbols] if filtered else visible[:max_symbols]
 
-        return visible[:max_symbols]
+        # Mode "smart" = scan silencieux de toutes les paires, filtre par spread
+        return self._smart_scan_instruments(visible, preferred, max_symbols)
+
+    def _smart_scan_instruments(self, visible: List[str], preferred: List[str], max_symbols: int) -> List[str]:
+        """
+        Scan silencieux: évalue chaque paire visible sur le spread.
+        Trie par favorabilité, prend les meilleures.
+        Les preferred_symbols sont prioritaires mais pas exclusifs.
+        """
+        candidates = []
+        for symbol in visible:
+            try:
+                spread = self.broker.get_spread_pips(symbol)
+                max_spread = self._max_spread_allowed(symbol)
+                if spread > max_spread:
+                    continue  # Spread trop cher → skip silencieusement
+
+                # Score de priorité: spread bas = meilleur
+                spread_ratio = spread / max(0.1, max_spread)  # 0 = parfait, 1 = limite
+                priority = 1.0 - spread_ratio
+                # Bonus pour preferred_symbols
+                is_preferred = any(symbol.upper() == p.upper() for p in preferred)
+                if is_preferred:
+                    priority += 0.5
+                # Bonus pour paires majeures connues (plus liquides)
+                name_upper = symbol.upper().replace("M", "").replace(".", "")
+                majors = {"EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "XAUUSD"}
+                if any(m in name_upper for m in majors):
+                    priority += 0.2
+
+                candidates.append((symbol, spread, priority))
+            except Exception:
+                continue  # Paire non-tradeable, on skip
+
+        # Trier par priorité descendante
+        candidates.sort(key=lambda x: x[2], reverse=True)
+        selected = [c[0] for c in candidates[:max_symbols]]
+        return selected
 
     def run_cycle(self):
         self.memory.log_session("═══ Cycle démarré ═══")
@@ -214,6 +262,10 @@ class TradeOrchestrator:
         if daily_loss_limit < 0 and today_pnl <= daily_loss_limit:
             self.memory.log_session(f"🛑 Perte journalière limite atteinte: ${today_pnl:.2f}")
             self._close_all_positions(open_positions, "limite de perte journalière")
+            try:
+                self.telegram.notify_daily_loss_limit(today_pnl, daily_loss_limit)
+            except Exception:
+                pass
             return
         # Pas d'objectif journalier fixe: on trade tant que le money management est respecté
         if today_pnl > 0:
@@ -249,12 +301,9 @@ class TradeOrchestrator:
         except Exception as cal_err:
             self.memory.record_error("calendar", str(cal_err))
 
-        # Filtre session / Kill Zone (ICT)
+        # Filtre session / Kill Zone (ICT) — advisory, pas de hard block
         try:
             session_info = get_session_score(instrument)
-            if session_info["instrument_quality"] < 0.2:
-                self.memory.log_session(f"🕐 {instrument}: session morte ({session_info['label']}) — skip")
-                return
             self.memory.log_session(f"🕐 {instrument}: {session_info['label']} (qualité={session_info['instrument_quality']})")
         except Exception as sess_err:
             session_info = {"label": "?", "instrument_quality": 0.5, "is_kill_zone": False}
@@ -358,28 +407,33 @@ class TradeOrchestrator:
                     f"| SMC={smc.get('smart_money_bias', '?')} ({smc.get('fvg_count', 0)} FVG, {smc.get('ob_count', 0)} OB)"
                 )
 
-                # Bloquer si corrélation trop forte
+                # Bloquer SEULEMENT si corrélation très forte (doublon de risque)
                 if correlation["blocked"]:
                     self.memory.log_session(f"🔗 {instrument}: BLOQUÉ corrélation — {correlation['reason']}")
                     return
                 if correlation["warnings"]:
                     self.memory.log_session(f"🔗 {instrument}: {correlation['warnings'][0]}")
 
-                # Bloquer si confluence D (très mauvaise) ET pas en kill zone
-                if confluence["quality"] == "D" and not session_info.get("is_kill_zone", False):
-                    self.memory.log_session(
-                        f"🛡️ {instrument}: confluence trop faible ({confluence['quality']}) hors kill zone — skip"
-                    )
-                    self.store.record_signal_sample(instrument, signal_h1, spread, {
-                        "decision": "WAIT", "confidence": 0.0,
-                        "reasoning": f"Confluence {confluence['quality']}, hors kill zone",
-                    })
-                    return
+                # Stratégies = advisory, ajustent le risque via pro_risk_factor
+                # Pas de hard block sur confluence/session — on laisse le LLM décider
+                pro_risk_factor = 1.0
+                if confluence["quality"] == "D":
+                    pro_risk_factor *= 0.5
+                    self.memory.log_session(f"⚠️ {instrument}: confluence faible ({confluence['quality']}) → risque ×0.5")
+                elif confluence["quality"] == "C":
+                    pro_risk_factor *= 0.7
+                if session_info.get("instrument_quality", 0.5) < 0.2:
+                    pro_risk_factor *= 0.6
+                    self.memory.log_session(f"⚠️ {instrument}: session morte → risque ×0.6")
+                if htf_bias.get("combined_bias") == "conflict":
+                    pro_risk_factor *= 0.5
+                    self.memory.log_session(f"⚠️ {instrument}: conflit HTF → risque ×0.5")
 
                 pro_llm_context = pro_ctx["llm_context"]
             except Exception as strat_err:
                 self.memory.record_error("strategies", str(strat_err))
                 pro_llm_context = ""
+                pro_risk_factor = 1.0
                 confluence = {"confluence_score": 0, "quality": "?", "max_score": 5}
                 htf_bias = {}
 
@@ -453,7 +507,7 @@ class TradeOrchestrator:
 
             ml_boost = 1.1 if float(ml_eval.get('probability', 0) or 0) >= 0.60 else 1.0
             rr_penalty = 0.6 if low_rr_guard and decision.get("decision") in ["BUY", "SELL"] else 1.0
-            decision["risk_multiplier"] = round(learning["risk_multiplier"] * ml_boost * rr_penalty, 2)
+            decision["risk_multiplier"] = round(learning["risk_multiplier"] * ml_boost * rr_penalty * pro_risk_factor, 2)
             instrument_positions = [p for p in self.broker.get_open_positions() if str(p.get("instrument", "")).upper() == instrument.upper()]
 
             if decision["decision"] in ["BUY", "SELL"]:
@@ -547,6 +601,14 @@ class TradeOrchestrator:
             self.memory.log_session(
                 f"✅ Trade #{trade_id} créé: {direction} {instrument} vol={volume} @ {order.get('entry_price', 0):.5f} [{order.get('status', 'open')}]"
             )
+            try:
+                self.telegram.notify_trade_opened(
+                    instrument, direction, volume,
+                    order.get("entry_price", 0), sl_pips, tp_pips,
+                    confidence, actual_risk, decision.get("reasoning", ""),
+                )
+            except Exception:
+                pass
         else:
             self.memory.log_session(f"❌ Échec ordre {instrument}")
 
@@ -598,6 +660,12 @@ class TradeOrchestrator:
                 self.memory.log_session(
                     f"{emoji} {instrument}: trade #{trade.get('id')} fermé ({close_reason}) | P&L = ${pnl_est:+.2f}"
                 )
+                try:
+                    self.telegram.notify_trade_closed(
+                        instrument, trade.get("direction", "?"), pnl_est, close_reason
+                    )
+                except Exception:
+                    pass
 
     def _get_deal_pnl(self, order_id) -> Optional[float]:
         """Get realized PnL from MT5 deal history for a given order."""

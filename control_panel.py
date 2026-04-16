@@ -640,6 +640,36 @@ HTML_PAGE = r"""<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- TELEGRAM SETTINGS -->
+  <div class="panel" style="margin-bottom:16px;">
+    <div class="panel-header">
+      <span class="panel-title">📱 Telegram Notifications</span>
+      <span class="refresh-info" id="tg-status">—</span>
+    </div>
+    <div class="panel-body">
+      <div class="form-grid">
+        <div class="field">
+          <label>Telegram actif</label>
+          <select id="setting-telegram-enabled">
+            <option value="true">true</option>
+            <option value="false">false</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Sélection paires</label>
+          <select id="setting-symbol-selection-mode">
+            <option value="smart">smart · scan auto</option>
+            <option value="preferred">preferred · statique</option>
+          </select>
+        </div>
+      </div>
+      <div style="margin-top:10px;display:flex;gap:10px;align-items:center;">
+        <button class="btn" onclick="testTelegram()">Tester Telegram</button>
+        <span class="refresh-info" id="tg-test-result"></span>
+      </div>
+    </div>
+  </div>
+
   <!-- AI EXCHANGE VIEWER -->
   <div class="ai-exchange" style="margin-bottom:16px;">
     <div class="ai-exchange-header" onclick="toggleAiExchange()">
@@ -867,6 +897,11 @@ function populateSettings(data) {
   document.getElementById('setting-analysis-notes').value = settings.llm_analysis_notes || '';
   document.getElementById('setting-allow-trade').value = String(settings.allow_trade_execution || false);
 
+  // Telegram + dynamic pairs
+  document.getElementById('setting-telegram-enabled').value = String(settings.telegram_enabled ?? true);
+  document.getElementById('setting-symbol-selection-mode').value = settings.symbol_selection_mode || 'smart';
+  document.getElementById('tg-status').textContent = (settings.telegram_enabled ?? true) ? 'actif' : 'désactivé';
+
   const ml = data.ml_stats || {};
   const modelState = data.ml_model_state || {};
   document.getElementById('ml-samples').textContent = modelState.sample_count || ml.samples || 0;
@@ -905,7 +940,9 @@ async function saveSettings(silent = false) {
     llm_min_confidence: parseFloat(document.getElementById('setting-confidence').value || '0.60'),
     max_llm_calls_per_day: parseInt(document.getElementById('setting-max-llm-calls').value || '0', 10),
     llm_analysis_notes: document.getElementById('setting-analysis-notes').value,
-    allow_trade_execution: document.getElementById('setting-allow-trade').value === 'true'
+    allow_trade_execution: document.getElementById('setting-allow-trade').value === 'true',
+    telegram_enabled: document.getElementById('setting-telegram-enabled').value === 'true',
+    symbol_selection_mode: document.getElementById('setting-symbol-selection-mode').value
   };
 
   const res = await fetch('/api/settings', {
@@ -1233,6 +1270,18 @@ async function testAI() {
   }
 }
 
+async function testTelegram() {
+  const el = document.getElementById('tg-test-result');
+  el.textContent = 'Envoi en cours...';
+  try {
+    const res = await fetch('/api/test-telegram', { method: 'POST' });
+    const data = await res.json();
+    el.textContent = data.ok ? '✅ ' + data.message : '❌ ' + (data.error || data.message || 'Échec');
+  } catch (e) {
+    el.textContent = '❌ Erreur: ' + e.message;
+  }
+}
+
 async function fetchStatus() {
   try {
     const res = await fetch('/api/status');
@@ -1519,6 +1568,14 @@ class Handler(BaseHTTPRequestHandler):
                 agent = TradeOrchestrator(quiet=True)
                 result = agent.preview_ai_decision(payload.get('instrument'))
                 self._send_json({"ok": True, "result": result})
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, status=500)
+        elif self.path == '/api/test-telegram':
+            try:
+                from telegram_notifier import TelegramNotifier
+                tg = TelegramNotifier()
+                ok = tg.test_connection()
+                self._send_json({"ok": ok, "message": "Message test envoyé !" if ok else "Échec de l'envoi"})
             except Exception as e:
                 self._send_json({"ok": False, "error": str(e)}, status=500)
         else:

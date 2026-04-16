@@ -17,6 +17,7 @@ from settings import (
     LLM_TEMPERATURE, LLM_MIN_CONFIDENCE, LLM_ANALYSIS_MODE,
     LLM_ANALYSIS_NOTES, LLM_MAX_CONTEXT_BARS,
     DAILY_TARGET, DAILY_LOSS_LIMIT, MAX_OPEN_POSITIONS,
+    TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, SYMBOL_SELECTION_MODE,
 )
 
 
@@ -80,6 +81,10 @@ class RuntimeStore:
             "llm_analysis_mode": str(LLM_ANALYSIS_MODE),
             "llm_analysis_notes": str(LLM_ANALYSIS_NOTES),
             "llm_context_bars": int(LLM_MAX_CONTEXT_BARS),
+            "telegram_enabled": True,
+            "telegram_bot_token": TELEGRAM_BOT_TOKEN,
+            "telegram_chat_id": TELEGRAM_CHAT_ID,
+            "symbol_selection_mode": SYMBOL_SELECTION_MODE,
         }
 
     def _clean_symbol(self, raw: Any) -> str:
@@ -95,7 +100,7 @@ class RuntimeStore:
         return aliases.get(value, original)
 
     def _normalize(self, key: str, value: Any) -> Any:
-        if key in {"allow_trade_execution"}:
+        if key in {"allow_trade_execution", "telegram_enabled"}:
             if isinstance(value, str):
                 return value.strip().lower() in {"1", "true", "yes", "on"}
             return bool(value)
@@ -107,7 +112,7 @@ class RuntimeStore:
             if isinstance(value, str):
                 return [self._clean_symbol(s) for s in value.split(",") if str(s).strip()]
             return [self._clean_symbol(s) for s in list(value)]
-        if key in {"ai_provider_requested", "symbol_source_mode", "local_llm_endpoint", "local_llm_model", "llm_analysis_mode", "llm_analysis_notes"}:
+        if key in {"ai_provider_requested", "symbol_source_mode", "local_llm_endpoint", "local_llm_model", "llm_analysis_mode", "llm_analysis_notes", "telegram_bot_token", "telegram_chat_id", "symbol_selection_mode"}:
             return str(value).strip()
         return value
 

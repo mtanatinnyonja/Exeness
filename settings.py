@@ -75,6 +75,18 @@ BB_PERIOD = 20
 BB_STD = 2.0
 ATR_PERIOD = 14
 
+# === TELEGRAM NOTIFICATIONS ===
+TELEGRAM_ENABLED = True
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8356692673:AAHMEOvUplwLpUQeYc3Y4oF4p65--0XYwnM").strip()
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "6013601728").strip()
+
+# === SÉLECTION DYNAMIQUE DES PAIRES ===
+# smart = scan toutes les paires visibles, filtre par spread + qualité, prend les meilleures
+SYMBOL_SELECTION_MODE = os.getenv("SYMBOL_SELECTION_MODE", "smart").strip().lower()
+MAX_SPREAD_FILTER_FOREX = float(os.getenv("MAX_SPREAD_FILTER_FOREX", "2.5"))
+MAX_SPREAD_FILTER_GOLD = float(os.getenv("MAX_SPREAD_FILTER_GOLD", "35.0"))
+MAX_SPREAD_FILTER_CRYPTO = float(os.getenv("MAX_SPREAD_FILTER_CRYPTO", "80.0"))
+
 # === MÉMOIRE & BASE LOCALE ===
 MEMORY_FILE = "data/agent_memory.json"
 TRADES_FILE = "data/trades_history.json"
