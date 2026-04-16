@@ -181,6 +181,11 @@ class AgentMemory:
         pattern = trade.get("pattern", "unknown")
         today = datetime.utcnow().strftime("%Y-%m-%d")
 
+        # Guard: avoid double-counting if stats already finalized for this trade
+        if trade.get("_stats_finalized"):
+            return
+        trade["_stats_finalized"] = True
+
         self.memory["total_pnl"] += pnl
         self.memory["daily_pnl"][today] = self.memory["daily_pnl"].get(today, 0.0) + pnl
 
@@ -212,6 +217,58 @@ class AgentMemory:
                 if wr < 35 or stats.get("total_pnl", 0) < 0:
                     learned.append(f"éviter pattern {name} (WR {wr:.0f}%)")
         self.memory["learned_filters"] = learned[-20:]
+
+    def rebuild_stats_from_trades(self):
+        """Recalculate all stats from the trade list. Fixes any corruption."""
+        self.memory["total_trades"] = 0
+        self.memory["winning_trades"] = 0
+        self.memory["losing_trades"] = 0
+        self.memory["total_pnl"] = 0.0
+        self.memory["daily_pnl"] = {}
+        self.memory["pattern_stats"] = {}
+        self.memory["instrument_stats"] = {}
+        self.memory["hour_stats"] = {}
+
+        for trade in self.trades:
+            instrument = trade.get("instrument", "unknown")
+            pattern = trade.get("pattern", "unknown")
+            self.memory["total_trades"] += 1
+
+            self.memory["instrument_stats"].setdefault(instrument, {"trades": 0, "wins": 0, "total_pnl": 0.0})
+            self.memory["instrument_stats"][instrument]["trades"] += 1
+
+            ts = trade.get("timestamp", "")
+            hour_key = ts[11:13] if len(ts) > 13 else "0"
+            self.memory["hour_stats"].setdefault(hour_key, {"trades": 0, "wins": 0, "total_pnl": 0.0})
+            self.memory["hour_stats"][hour_key]["trades"] += 1
+
+            if trade.get("status") == "closed" and "pnl" in trade:
+                pnl = float(trade["pnl"])
+                day = (trade.get("closed_at") or trade.get("timestamp", ""))[:10]
+                if day:
+                    self.memory["daily_pnl"][day] = self.memory["daily_pnl"].get(day, 0.0) + pnl
+                self.memory["total_pnl"] += pnl
+
+                if pnl > 0:
+                    self.memory["winning_trades"] += 1
+                    self.memory["instrument_stats"][instrument]["wins"] += 1
+                    self.memory["hour_stats"][hour_key]["wins"] += 1
+                else:
+                    self.memory["losing_trades"] += 1
+
+                self.memory["instrument_stats"][instrument]["total_pnl"] += pnl
+                self.memory["hour_stats"][hour_key]["total_pnl"] += pnl
+
+                self.memory["pattern_stats"].setdefault(pattern, {"trades": 0, "wins": 0, "total_pnl": 0.0})
+                self.memory["pattern_stats"][pattern]["trades"] += 1
+                self.memory["pattern_stats"][pattern]["total_pnl"] += pnl
+                if pnl > 0:
+                    self.memory["pattern_stats"][pattern]["wins"] += 1
+
+                trade["_stats_finalized"] = True
+
+        self._refresh_learned_filters()
+        self.save()
 
     # === STATS UTILES ===
     def get_daily_pnl(self, date: str = None) -> float:

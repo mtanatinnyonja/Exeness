@@ -392,6 +392,75 @@ HTML_PAGE = r"""<!DOCTYPE html>
     margin-top: 8px;
   }
 
+  /* AI EXCHANGE VIEWER */
+  .ai-exchange {
+    margin-top: 16px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--bg2);
+    overflow: hidden;
+  }
+  .ai-exchange-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    user-select: none;
+  }
+  .ai-exchange-header:hover { background: rgba(255,255,255,0.02); }
+  .ai-exchange-body { padding: 0 18px 18px; display: none; }
+  .ai-exchange-body.open { display: block; }
+  .ai-msg {
+    margin-top: 14px;
+    border-radius: 12px;
+    padding: 14px 16px;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 400px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border2) transparent;
+  }
+  .ai-msg-prompt {
+    background: linear-gradient(135deg, rgba(124,106,247,0.08), rgba(61,217,255,0.04));
+    border: 1px solid rgba(124,106,247,0.15);
+    border-left: 3px solid var(--accent);
+  }
+  .ai-msg-response {
+    background: linear-gradient(135deg, rgba(61,255,160,0.06), rgba(61,217,255,0.04));
+    border: 1px solid rgba(61,255,160,0.12);
+    border-left: 3px solid var(--green);
+  }
+  .ai-msg-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .ai-msg-label.prompt-label { color: var(--accent2); }
+  .ai-msg-label.response-label { color: var(--green); }
+  .ai-exchange-meta {
+    display: flex;
+    gap: 16px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 10px;
+    flex-wrap: wrap;
+  }
+  .toggle-arrow {
+    transition: transform 0.2s;
+    font-size: 14px;
+    color: var(--muted);
+  }
+  .toggle-arrow.open { transform: rotate(180deg); }
+
   /* Responsive */
   @media (max-width: 768px) {
     .main-grid { grid-template-columns: 1fr; }
@@ -567,6 +636,34 @@ HTML_PAGE = r"""<!DOCTYPE html>
           </div>
         </div>
         <div id="ai-history-chart" class="ai-bars"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- AI EXCHANGE VIEWER -->
+  <div class="ai-exchange" style="margin-bottom:16px;">
+    <div class="ai-exchange-header" onclick="toggleAiExchange()">
+      <span class="panel-title">🔍 Requête & Réponse IA (dernière analyse)</span>
+      <span class="toggle-arrow" id="ai-exchange-arrow">▼</span>
+    </div>
+    <div class="ai-exchange-body" id="ai-exchange-body">
+      <div class="ai-exchange-meta" id="ai-exchange-meta">
+        <span>Instrument: <strong id="ai-ex-instrument">—</strong></span>
+        <span>Modèle: <strong id="ai-ex-model">—</strong></span>
+        <span>Heure: <strong id="ai-ex-time">—</strong></span>
+        <span>Provider: <strong id="ai-ex-provider">—</strong></span>
+      </div>
+      <div class="ai-msg ai-msg-prompt">
+        <div class="ai-msg-label prompt-label">🧠 PROMPT ENVOYÉ À L'IA</div>
+        <div id="ai-ex-prompt" style="color:var(--text)">Aucune analyse effectuée.</div>
+      </div>
+      <div class="ai-msg ai-msg-response">
+        <div class="ai-msg-label response-label">💬 RÉPONSE BRUTE DE L'IA</div>
+        <div id="ai-ex-raw-response" style="color:var(--text)">—</div>
+      </div>
+      <div class="ai-msg" style="background:rgba(255,184,71,0.06);border:1px solid rgba(255,184,71,0.12);border-left:3px solid var(--amber);">
+        <div class="ai-msg-label" style="color:var(--amber);">📋 DÉCISION PARSÉE</div>
+        <div id="ai-ex-parsed" style="color:var(--text)">—</div>
       </div>
     </div>
   </div>
@@ -920,6 +1017,38 @@ function toggleAutoAI() {
   document.getElementById('ai-live-auto').textContent = autoAiEnabled ? 'ON · 45s' : 'OFF';
 }
 
+function toggleAiExchange() {
+  const body = document.getElementById('ai-exchange-body');
+  const arrow = document.getElementById('ai-exchange-arrow');
+  const isOpen = body.classList.toggle('open');
+  arrow.classList.toggle('open', isOpen);
+}
+
+function renderAiExchange(exchange) {
+  if (!exchange || !exchange.prompt) return;
+  document.getElementById('ai-ex-instrument').textContent = exchange.instrument || '—';
+  document.getElementById('ai-ex-model').textContent = exchange.model || '—';
+  document.getElementById('ai-ex-provider').textContent = exchange.provider || '—';
+  const ts = exchange.timestamp || '';
+  document.getElementById('ai-ex-time').textContent = ts ? ts.replace('T', ' ').slice(0, 19) : '—';
+
+  // Format prompt with syntax highlighting
+  const promptText = exchange.prompt || 'Aucun prompt.';
+  document.getElementById('ai-ex-prompt').textContent = promptText;
+
+  // Raw response
+  const rawResp = exchange.raw_response || '—';
+  document.getElementById('ai-ex-raw-response').textContent = rawResp;
+
+  // Parsed response as formatted JSON
+  const parsed = exchange.parsed_response;
+  if (parsed && typeof parsed === 'object') {
+    document.getElementById('ai-ex-parsed').textContent = JSON.stringify(parsed, null, 2);
+  } else {
+    document.getElementById('ai-ex-parsed').textContent = String(parsed || '—');
+  }
+}
+
 async function testAI() {
   if (aiBusy) return;
   aiBusy = true;
@@ -936,6 +1065,7 @@ async function testAI() {
       const d = data.result?.decision || {};
       lastAiPayload = data.result || null;
       renderAiDecision(data.result || {});
+      if (data.result?.last_ai_exchange) renderAiExchange(data.result.last_ai_exchange);
       const liveMode = document.getElementById('setting-allow-trade').value === 'true'
         ? 'mode réel démo actif'
         : 'mode aperçu actif';
@@ -984,6 +1114,7 @@ async function fetchStatus() {
     }
     syncFocusPairs(data.active_symbols || []);
     renderAiChart(data);
+    if (data.last_ai_exchange && data.last_ai_exchange.prompt) renderAiExchange(data.last_ai_exchange);
 
     // Live snapshot rotation: show chart even before first AI call
     if (data.live_snapshot && data.live_snapshot.closes) {

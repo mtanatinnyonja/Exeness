@@ -43,6 +43,11 @@ class LocalIntelligence:
         self.analysis_notes = LLM_ANALYSIS_NOTES
         self.context_bars = LLM_MAX_CONTEXT_BARS
         self.provider = "ollama"
+        self.last_prompt = ""
+        self.last_raw_response = ""
+        self.last_parsed_response = None
+        self.last_analysis_instrument = ""
+        self.last_analysis_timestamp = ""
         self.refresh_runtime_settings()
 
     def refresh_runtime_settings(self):
@@ -155,25 +160,62 @@ class LocalIntelligence:
         text = (raw_text or "").strip()
         if not text:
             return None
-        try:
-            return json.loads(text)
-        except Exception:
-            pass
-        start = text.find("{")
-        end = text.rfind("}")
-        if start != -1 and end != -1 and end > start:
+
+        # Strip // and # comments that LLMs love to add in JSON
+        def _strip_json_comments(s: str) -> str:
+            lines = s.split("\n")
+            cleaned = []
+            for line in lines:
+                # Remove // comments (but not inside strings)
+                in_string = False
+                i = 0
+                result_line = line
+                while i < len(line) - 1:
+                    if line[i] == '"' and (i == 0 or line[i-1] != '\\'):
+                        in_string = not in_string
+                    if not in_string and line[i:i+2] == '//':
+                        result_line = line[:i]
+                        break
+                    i += 1
+                # Remove # comments (not inside strings)
+                in_string = False
+                i = 0
+                temp = result_line
+                while i < len(temp):
+                    if temp[i] == '"' and (i == 0 or temp[i-1] != '\\'):
+                        in_string = not in_string
+                    if not in_string and temp[i] == '#':
+                        result_line = temp[:i]
+                        break
+                    i += 1
+                cleaned.append(result_line.rstrip())
+            return "\n".join(cleaned)
+
+        # Try cleaning comments first, then parse
+        for candidate in [text, _strip_json_comments(text)]:
             try:
-                return json.loads(text[start:end + 1])
+                return json.loads(candidate)
             except Exception:
                 pass
-        # Repair truncated JSON: close open strings and braces
+            start = candidate.find("{")
+            end = candidate.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                try:
+                    return json.loads(candidate[start:end + 1])
+                except Exception:
+                    pass
+
+        # Last resort: strip comments, extract JSON block, repair truncation
+        cleaned = _strip_json_comments(text)
+        start = cleaned.find("{")
         if start != -1:
-            fragment = text[start:]
+            fragment = cleaned[start:]
             # Close any open string
             if fragment.count('"') % 2 == 1:
                 fragment += '"'
             # Close open braces
-            fragment += "}"
+            open_braces = fragment.count('{') - fragment.count('}')
+            fragment += "}" * max(0, open_braces)
             try:
                 return json.loads(fragment)
             except Exception:
@@ -195,6 +237,10 @@ class LocalIntelligence:
         try:
             self.memory.increment_llm_calls()
             self.memory.record_token_usage(prompt_tokens=prompt_tokens, completion_tokens=0)
+            self.last_prompt = SYSTEM_PROMPT + "\n\n" + prompt
+            self.last_analysis_instrument = instrument
+            from datetime import datetime as _dt
+            self.last_analysis_timestamp = _dt.utcnow().isoformat()
             response = requests.post(
                 self.local_llm_endpoint,
                 headers={"Content-Type": "application/json"},
@@ -204,7 +250,7 @@ class LocalIntelligence:
                     "stream": False,
                     "options": {
                         "temperature": self.llm_temperature,
-                        "num_predict": 250,
+                        "num_predict": 500,
                     },
                     "keep_alive": "10m",
                 },
@@ -213,7 +259,9 @@ class LocalIntelligence:
             response.raise_for_status()
             data = response.json()
             raw_text = (data.get("response") or "").strip()
+            self.last_raw_response = raw_text
             result = self._coerce_json_result(raw_text)
+            self.last_parsed_response = result
             if result is None:
                 self.memory.record_error("ollama", f"réponse non-JSON: {raw_text[:180]}")
                 return None
@@ -275,31 +323,53 @@ RÈGLES:
 - stop_loss_pips = distance en pips jusqu'au niveau structurel (pas juste ATR)
 - take_profit_pips = objectif basé sur le prochain niveau clé
 
-JSON uniquement:
+JSON uniquement (pas de commentaires //, pas de #, pas d'expressions mathématiques dans les valeurs):
 {{"decision":"BUY|SELL|WAIT","confidence":0.0-1.0,"stop_loss_pips":N,"take_profit_pips":N,"reasoning":"analyse price action courte","insight":"résumé"}}"""
 
         result = None
+        from datetime import datetime as _dt
+        self.last_analysis_instrument = instrument
+        self.last_analysis_timestamp = _dt.utcnow().isoformat()
+
         if fast_mode:
+            self.last_prompt = f"[MODE RAPIDE - règles locales]\n\n{prompt}"
             result = self._technical_fallback_decision(
                 instrument,
                 signal,
-                "Mode aperçu rapide du dashboard."
+                "Décision rapide locale (règles + indicateurs, sans appel LLM)."
             )
+            self.last_raw_response = json.dumps(result, ensure_ascii=False, indent=2) if result else ""
+            self.last_parsed_response = result
         elif self.provider == "ollama":
             result = self._call_ollama(prompt, today_pnl, instrument)
 
         if result is None:
+            self.last_prompt = f"[FALLBACK - LLM indisponible]\n\n{prompt}"
             result = self._technical_fallback_decision(
                 instrument,
                 signal,
-                f"LLM Ollama indisponible. Installe ou démarre Ollama avec le modèle {self.local_llm_model}."
+                f"LLM Ollama a échoué (timeout/erreur/JSON invalide). Modèle: {self.local_llm_model}."
             )
+            self.last_raw_response = json.dumps(result, ensure_ascii=False, indent=2) if result else ""
+            self.last_parsed_response = result
 
         self.memory.log_session(
             f"🤖 {self.provider} → {instrument}: {result['decision']} "
             f"(conf: {result.get('confidence', 0):.2f}) | {result.get('reasoning', '')[:90]}"
         )
         return result
+
+    def get_last_exchange(self) -> Dict:
+        """Return the last prompt/response exchange for dashboard display."""
+        return {
+            "instrument": self.last_analysis_instrument,
+            "timestamp": self.last_analysis_timestamp,
+            "prompt": self.last_prompt,
+            "raw_response": self.last_raw_response,
+            "parsed_response": self.last_parsed_response,
+            "provider": self.provider,
+            "model": self.local_llm_model,
+        }
 
     def get_market_summary(self, instruments_data: Dict) -> str:
         token_usage = self.memory.get_token_usage_today()

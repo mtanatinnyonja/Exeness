@@ -317,7 +317,8 @@ class TradeOrchestrator:
             if not use_full_llm and direction in {"BUY", "SELL"} and score >= max(2, min_signal_required - 1):
                 # Filet de sécurité: forcer ponctuellement une vraie consultation LLM
                 # pour éviter de rester bloqué en mode "rapide" pendant des heures.
-                use_full_llm = self.memory.get_llm_calls_today() < 2
+                # Permet au moins 1 appel LLM réel par instrument par cycle de ~10 analyses.
+                use_full_llm = self.memory.get_llm_calls_today() < max(6, len(instruments) * 2)
             if use_full_llm:
                 decision = self.intelligence.analyze_signal(instrument, signal_h1, account, market_ctx, candles=candles_h1)
                 self.memory.log_session(f"🧠 {instrument}: validation complète par le LLM local")
@@ -599,6 +600,7 @@ class TradeOrchestrator:
             "spread": spread,
             "ml_eval": ml_eval,
             "market_snapshot": self._build_live_snapshot(target),
+            "last_ai_exchange": self.intelligence.get_last_exchange(),
         }
 
     def get_status(self, focus_symbol: str = "") -> Dict:
@@ -660,4 +662,5 @@ class TradeOrchestrator:
             "learned_filters": self.memory.memory.get("learned_filters", [])[-5:],
             "runtime_mode": "local-only",
             "live_snapshot": live_snapshot,
+            "last_ai_exchange": self.intelligence.get_last_exchange(),
         }
