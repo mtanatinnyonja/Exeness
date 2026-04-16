@@ -30,6 +30,7 @@ class LocalSignalModel:
         self.broker = broker
         self._model: Optional[TrainedLocalModel] = None
         self._last_refresh_ts: float = 0.0
+        self._label_cache: Dict[str, Optional[int]] = {}  # (instrument|ts|dir) → label
 
     def _now_ts(self) -> float:
         return datetime.now(timezone.utc).timestamp()
@@ -89,7 +90,7 @@ class LocalSignalModel:
         lr = 0.15
         reg = 0.01
 
-        for _ in range(350):
+        for _ in range(min(600, max(350, len(Xn) * 2))):
             logits = Xn @ weights + bias
             preds = self._sigmoid(logits)
             error = preds - y
@@ -116,19 +117,27 @@ class LocalSignalModel:
         if not force and self._model is not None and (now - self._last_refresh_ts) < 90:
             return self._model
 
-        rows = self.store.get_ml_training_samples(220)
+        rows = self.store.get_ml_training_samples(1000)
         X_list = []
         y_list = []
         for row in rows:
             direction = str(row.get('direction') or row.get('decision') or '').upper()
             if direction not in {'BUY', 'SELL'}:
                 continue
-            outcome = self.broker.get_signal_outcome_label(
-                instrument=row.get('instrument'),
-                sample_time=row.get('timestamp'),
-                direction=direction,
-                spread=float(row.get('spread', 0) or 0),
-            )
+            cache_key = f"{row.get('instrument')}|{row.get('timestamp')}|{direction}"
+            if cache_key in self._label_cache:
+                outcome = self._label_cache[cache_key]
+            else:
+                try:
+                    outcome = self.broker.get_signal_outcome_label(
+                        instrument=row.get('instrument'),
+                        sample_time=row.get('timestamp'),
+                        direction=direction,
+                        spread=float(row.get('spread', 0) or 0),
+                    )
+                except Exception:
+                    outcome = None
+                self._label_cache[cache_key] = outcome
             if outcome is None:
                 continue
             X_list.append(self._feature_vector_from_sample(row))

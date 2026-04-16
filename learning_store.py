@@ -344,7 +344,7 @@ Derniers trades:
     def log_session(self, message: str):
         entry = f"[{datetime.utcnow().strftime('%H:%M:%S')}] {message}"
         self.memory.setdefault("session_log", []).append(entry)
-        self.memory["session_log"] = self.memory["session_log"][-100:]
+        self.memory["session_log"] = self.memory["session_log"][-300:]
         try:
             print(entry)
         except UnicodeEncodeError:

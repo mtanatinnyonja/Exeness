@@ -355,7 +355,7 @@ JSON uniquement (pas de commentaires //, pas de #, pas d'expressions mathématiq
 
         self.memory.log_session(
             f"🤖 {self.provider} → {instrument}: {result['decision']} "
-            f"(conf: {result.get('confidence', 0):.2f}) | {result.get('reasoning', '')[:90]}"
+            f"(conf: {result.get('confidence', 0):.2f}) | {result.get('reasoning', '')[:200]}"
         )
         return result
 

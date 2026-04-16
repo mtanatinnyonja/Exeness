@@ -779,8 +779,8 @@ HTML_PAGE = r"""<!DOCTYPE html>
 </div>
 
 <script>
-let countdown = 5;
-let autoAiCountdown = 45;
+let countdown = 3;
+let autoAiCountdown = 30;
 let autoSaveTimer = null;
 let autoAiEnabled = true;
 let aiBusy = false;
@@ -1012,9 +1012,9 @@ function renderAiChart(data) {
 
 function toggleAutoAI() {
   autoAiEnabled = !autoAiEnabled;
-  autoAiCountdown = 45;
+  autoAiCountdown = 30;
   document.getElementById('auto-ai-btn').textContent = 'Auto IA: ' + (autoAiEnabled ? 'ON' : 'OFF');
-  document.getElementById('ai-live-auto').textContent = autoAiEnabled ? 'ON · 45s' : 'OFF';
+  document.getElementById('ai-live-auto').textContent = autoAiEnabled ? 'ON · 30s' : 'OFF';
 }
 
 function toggleAiExchange() {
@@ -1078,7 +1078,7 @@ async function testAI() {
     }
   } finally {
     aiBusy = false;
-    autoAiCountdown = 45;
+    autoAiCountdown = 30;
     await fetchStatus();
   }
 }
@@ -1263,7 +1263,7 @@ function tick() {
     document.getElementById('ai-live-auto').textContent = 'ON · ' + Math.max(0, autoAiCountdown) + 's';
   }
   if (countdown <= 0) {
-    countdown = 5;
+    countdown = 3;
     fetchStatus();
   }
   if (autoAiEnabled && autoAiCountdown <= 0 && !aiBusy) {

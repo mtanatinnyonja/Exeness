@@ -286,7 +286,11 @@ class TradeOrchestrator:
             min_rr = self._min_rr_required(instrument)
             # Le RR guard sera recalculé après la décision de l'IA (sur la direction finale)
 
-            ml_eval = self.ml_model.evaluate_signal(signal_h1, spread)
+            try:
+                ml_eval = self.ml_model.evaluate_signal(signal_h1, spread)
+            except Exception as ml_err:
+                self.memory.record_error("ml_eval", str(ml_err))
+                ml_eval = {'trained': False, 'probability': 0.5, 'sample_count': 0, 'accuracy': None, 'source': 'fallback-error'}
             self.memory.log_session(
                 f"🧠 ML local {instrument}: p={ml_eval.get('probability', 0):.2f} | "
                 f"samples={ml_eval.get('sample_count', 0)} | source={ml_eval.get('source', 'n/a')}"
@@ -366,7 +370,7 @@ class TradeOrchestrator:
             else:
                 if instrument_positions:
                     self.memory.log_session(f"🧭 {instrument}: pas de nouveau trade, position existante surveillée automatiquement")
-                self.memory.log_session(f"⏸️ {instrument}: IA dit WAIT - {decision.get('reasoning', '')[:90]}")
+                self.memory.log_session(f"⏸️ {instrument}: IA dit WAIT - {decision.get('reasoning', '')[:200]}")
 
         except Exception as e:
             self.memory.record_error(f"analysis:{instrument}", str(e))
@@ -630,7 +634,7 @@ class TradeOrchestrator:
             except Exception as e:
                 self.memory.record_error("live_snapshot", str(e))
 
-        raw_logs = self.memory.memory.get("session_log", [])[-80:]
+        raw_logs = self.memory.memory.get("session_log", [])[-200:]
         return {
             "timestamp": datetime.utcnow().isoformat(),
             "market_open": bool(market_status.get("open")),
@@ -645,7 +649,7 @@ class TradeOrchestrator:
             "llm_calls_today": llm_calls,
             "api_calls_today": llm_calls,
             "recent_trades": self.memory.get_recent_trades(5),
-            "session_log": raw_logs[-20:],
+            "session_log": raw_logs[-60:],
             "best_patterns": self.memory.get_best_patterns()[:3],
             "broker": {
                 "name": getattr(self.broker, "name", "unknown"),

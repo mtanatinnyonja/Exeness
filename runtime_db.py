@@ -216,7 +216,7 @@ class RuntimeStore:
             for row in rows[::-1]
         ]
 
-    def get_ml_training_samples(self, limit: int = 220) -> list[Dict[str, Any]]:
+    def get_ml_training_samples(self, limit: int = 1000) -> list[Dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
                 """
