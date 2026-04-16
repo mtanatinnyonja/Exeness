@@ -24,6 +24,7 @@ from smart_strategies import (
     calculate_trail_levels, check_correlation_risk, build_strategies_context,
 )
 from telegram_notifier import TelegramNotifier
+from market_protection import run_all_protections
 
 _status_rotation_idx = 0
 
@@ -356,6 +357,31 @@ class TradeOrchestrator:
                 self.memory.log_session(f"⚠️ {instrument}: spread trop large ({spread:.1f} pips > {max_spread:.1f})")
                 return
 
+            # ── Protections anti-manipulation ──
+            try:
+                pip_sz = self.broker._pip_size(instrument)
+                protections = run_all_protections(
+                    instrument, candles_h1, spread, pip_sz,
+                    price=candles_h1[-1]["close"] if candles_h1 else None,
+                )
+                if protections["blocked"]:
+                    for hb in protections["hard_blocks"]:
+                        self.memory.log_session(f"🛡️ {instrument}: {hb}")
+                    return
+                protection_risk = protections["risk_adjustment"]
+                if protections["warnings"]:
+                    for w in protections["warnings"][:3]:
+                        self.memory.log_session(f"🔎 {instrument}: {w}")
+                protection_llm_ctx = protections["llm_context"]
+                liquidity_sweep = protections["liquidity_sweep"]
+                market_structure = protections["structure"]
+            except Exception as prot_err:
+                self.memory.record_error("protections", str(prot_err))
+                protection_risk = 1.0
+                protection_llm_ctx = ""
+                liquidity_sweep = {}
+                market_structure = {}
+
             rr_buy = float(details.get("rr_buy", 0) or 0)
             rr_sell = float(details.get("rr_sell", 0) or 0)
             min_rr = self._min_rr_required(instrument)
@@ -456,6 +482,9 @@ class TradeOrchestrator:
             # Ajouter le contexte stratégies pro
             if pro_llm_context:
                 market_ctx += f"\nSTRATÉGIES PRO:\n{pro_llm_context}"
+            # Ajouter le contexte anti-manipulation + structure de marché
+            if protection_llm_ctx and "Aucune alerte" not in protection_llm_ctx:
+                market_ctx += f"\nPROTECTIONS MARCHÉ:\n{protection_llm_ctx}"
             # Ajouter le contexte calendrier économique
             try:
                 cal_ctx = self.calendar.get_context_for_llm(instrument)
@@ -507,7 +536,7 @@ class TradeOrchestrator:
 
             ml_boost = 1.1 if float(ml_eval.get('probability', 0) or 0) >= 0.60 else 1.0
             rr_penalty = 0.6 if low_rr_guard and decision.get("decision") in ["BUY", "SELL"] else 1.0
-            decision["risk_multiplier"] = round(learning["risk_multiplier"] * ml_boost * rr_penalty * pro_risk_factor, 2)
+            decision["risk_multiplier"] = round(learning["risk_multiplier"] * ml_boost * rr_penalty * pro_risk_factor * protection_risk, 2)
             instrument_positions = [p for p in self.broker.get_open_positions() if str(p.get("instrument", "")).upper() == instrument.upper()]
 
             if decision["decision"] in ["BUY", "SELL"]:
@@ -871,6 +900,7 @@ class TradeOrchestrator:
             "last_ai_exchange": self.intelligence.get_last_exchange(),
             "economic_calendar": self._get_calendar_summary(),
             "pro_strategies": self._get_strategies_summary(active_symbols, positions),
+            "market_protections": self._get_protections_summary(active_symbols),
         }
 
     def _get_calendar_summary(self) -> Dict:
@@ -922,3 +952,35 @@ class TradeOrchestrator:
             }
         except Exception:
             return {"session": {}, "htf_bias": {}, "smart_money": {}, "open_correlations": []}
+
+    def _get_protections_summary(self, symbols: List[str]) -> Dict:
+        """Résumé des protections anti-manipulation pour le dashboard."""
+        try:
+            target = symbols[0] if symbols else None
+            if not target:
+                return {"status": "no_symbol", "alerts": []}
+            candles = self.broker.get_candles(target, PRIMARY_TIMEFRAME, 60)
+            spread = self.broker.get_spread_pips(target)
+            pip_sz = self.broker._pip_size(target)
+            price = candles[-1]["close"] if candles else 0
+            result = run_all_protections(target, candles, spread, pip_sz, price)
+            return {
+                "symbol": target,
+                "blocked": result["blocked"],
+                "risk_adjustment": result["risk_adjustment"],
+                "alerts": result["hard_blocks"] + result["warnings"],
+                "spread_spike": result["spread_check"].get("spike", False),
+                "ghost_candle": result["ghost_check"].get("detected", False),
+                "news_spike": result["news_spike"].get("spike", False),
+                "slippage_level": result["slippage_check"].get("level", "LOW"),
+                "round_number": result["round_number"].get("near_round_number", False),
+                "liquidity_sweep": result["liquidity_sweep"].get("detected", False),
+                "sweep_direction": result["liquidity_sweep"].get("signal_direction"),
+                "structure_trend": result["structure"].get("trend", "undefined"),
+                "bos": result["structure"].get("bos") is not None,
+                "choch": result["structure"].get("choch") is not None,
+                "bos_detail": result["structure"].get("bos", {}).get("context", ""),
+                "choch_detail": result["structure"].get("choch", {}).get("context", ""),
+            }
+        except Exception:
+            return {"status": "error", "alerts": []}

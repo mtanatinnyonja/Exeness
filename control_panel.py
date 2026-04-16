@@ -743,6 +743,36 @@ HTML_PAGE = r"""<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- MARKET PROTECTIONS -->
+  <div class="ai-exchange" style="margin-bottom:16px;" id="protections-panel">
+    <div class="ai-exchange-header" onclick="toggleProtections()">
+      <span class="panel-title">🛡️ Protections Anti-Manipulation</span>
+      <span id="protection-badge" style="padding:2px 8px;border-radius:4px;font-size:0.75em;margin-left:8px;"></span>
+      <span class="toggle-arrow" id="protections-arrow">▼</span>
+    </div>
+    <div class="ai-exchange-body" id="protections-body">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div style="background:rgba(255,255,255,0.03);padding:10px;border-radius:8px;">
+          <div style="color:var(--teal);font-weight:600;margin-bottom:6px;">📡 Spread & Slippage</div>
+          <div id="prot-spread" style="color:var(--text);font-size:0.85em;">—</div>
+        </div>
+        <div style="background:rgba(255,255,255,0.03);padding:10px;border-radius:8px;">
+          <div style="color:var(--teal);font-weight:600;margin-bottom:6px;">👻 Ghost Candles & News Spike</div>
+          <div id="prot-ghost" style="color:var(--text);font-size:0.85em;">—</div>
+        </div>
+        <div style="background:rgba(255,255,255,0.03);padding:10px;border-radius:8px;">
+          <div style="color:var(--teal);font-weight:600;margin-bottom:6px;">💧 Liquidity Sweep (SMC)</div>
+          <div id="prot-sweep" style="color:var(--text);font-size:0.85em;">—</div>
+        </div>
+        <div style="background:rgba(255,255,255,0.03);padding:10px;border-radius:8px;">
+          <div style="color:var(--teal);font-weight:600;margin-bottom:6px;">📐 Structure BOS/CHoCH</div>
+          <div id="prot-structure" style="color:var(--text);font-size:0.85em;">—</div>
+        </div>
+      </div>
+      <div id="prot-alerts" style="margin-top:10px;font-size:0.82em;color:var(--muted);"></div>
+    </div>
+  </div>
+
   <!-- KPIs -->
   <div class="kpi-grid">
     <div class="kpi">
@@ -1211,6 +1241,67 @@ function renderStrategies(strat) {
   }
 }
 
+function toggleProtections() {
+  const body = document.getElementById('protections-body');
+  const arrow = document.getElementById('protections-arrow');
+  if (body.style.display === 'none') { body.style.display = 'block'; arrow.textContent = '▼'; }
+  else { body.style.display = 'none'; arrow.textContent = '▶'; }
+}
+
+function renderProtections(prot) {
+  if (!prot) return;
+  const badge = document.getElementById('protection-badge');
+  const alerts = prot.alerts || [];
+  if (prot.blocked) {
+    badge.style.background = '#e74c3c'; badge.style.color = '#fff';
+    badge.textContent = '🔴 BLOQUÉ';
+  } else if (alerts.length > 0) {
+    badge.style.background = '#f39c12'; badge.style.color = '#000';
+    badge.textContent = alerts.length + ' alerte(s)';
+  } else {
+    badge.style.background = '#00e676'; badge.style.color = '#000';
+    badge.textContent = '✅ OK';
+  }
+  // Spread & Slippage
+  const spreadDiv = document.getElementById('prot-spread');
+  const slip = prot.slippage_level || 'LOW';
+  const slipColor = slip === 'HIGH' ? '#e74c3c' : slip === 'MEDIUM' ? '#f39c12' : '#00e676';
+  spreadDiv.innerHTML = 'Spread spike: ' + (prot.spread_spike ? '<strong style="color:#e74c3c">⚠️ OUI</strong>' : '<strong style="color:#00e676">Non</strong>') +
+    '<br>Slippage: <strong style="color:' + slipColor + '">' + slip + '</strong>' +
+    '<br>Round number: ' + (prot.round_number ? '<strong style="color:#f39c12">⚠️ Proche</strong>' : '<strong>Non</strong>') +
+    '<br>Risk adj: <strong>' + ((prot.risk_adjustment || 1) * 100).toFixed(0) + '%</strong>';
+  // Ghost & News
+  const ghostDiv = document.getElementById('prot-ghost');
+  ghostDiv.innerHTML = 'Ghost candle: ' + (prot.ghost_candle ? '<strong style="color:#e74c3c">⚠️ Détectée</strong>' : '<strong style="color:#00e676">Non</strong>') +
+    '<br>News spike: ' + (prot.news_spike ? '<strong style="color:#e74c3c">⚠️ Actif</strong>' : '<strong style="color:#00e676">Non</strong>');
+  // Liquidity Sweep
+  const sweepDiv = document.getElementById('prot-sweep');
+  if (prot.liquidity_sweep) {
+    const dir = prot.sweep_direction || '?';
+    const dirColor = dir === 'BUY' ? '#00e676' : dir === 'SELL' ? '#e74c3c' : '#888';
+    sweepDiv.innerHTML = '<strong style="color:' + dirColor + '">💧 Sweep détecté → ' + dir + '</strong>' +
+      '<br><span style="opacity:0.7;">Les institutions ont balayé la liquidité</span>';
+  } else {
+    sweepDiv.innerHTML = '<span style="color:var(--muted);">Pas de sweep récent</span>';
+  }
+  // Structure BOS/CHoCH
+  const structDiv = document.getElementById('prot-structure');
+  const trend = prot.structure_trend || 'undefined';
+  const trendColor = trend === 'bullish' ? '#00e676' : trend === 'bearish' ? '#e74c3c' : '#f39c12';
+  let structHtml = 'Tendance: <strong style="color:' + trendColor + '">' + trend + '</strong>';
+  if (prot.bos) structHtml += '<br><strong style="color:#00e676;">📈 BOS</strong> ' + (prot.bos_detail || '').slice(0, 80);
+  if (prot.choch) structHtml += '<br><strong style="color:#f39c12;">🔄 CHoCH</strong> ' + (prot.choch_detail || '').slice(0, 80);
+  if (!prot.bos && !prot.choch) structHtml += '<br><span style="opacity:0.7;">Pas de cassure de structure</span>';
+  structDiv.innerHTML = structHtml;
+  // Alerts list
+  const alertsDiv = document.getElementById('prot-alerts');
+  if (alerts.length > 0) {
+    alertsDiv.innerHTML = alerts.map(a => '<div>' + a + '</div>').join('');
+  } else {
+    alertsDiv.innerHTML = '<span style="color:#00e676;">Aucune alerte — marché sain</span>';
+  }
+}
+
 function renderAiExchange(exchange) {
   if (!exchange || !exchange.prompt) return;
   document.getElementById('ai-ex-instrument').textContent = exchange.instrument || '—';
@@ -1316,6 +1407,7 @@ async function fetchStatus() {
     if (data.last_ai_exchange && data.last_ai_exchange.prompt) renderAiExchange(data.last_ai_exchange);
     if (data.economic_calendar) renderCalendar(data.economic_calendar);
     if (data.pro_strategies) renderStrategies(data.pro_strategies);
+    if (data.market_protections) renderProtections(data.market_protections);
 
     // Live snapshot rotation: show chart even before first AI call
     if (data.live_snapshot && data.live_snapshot.closes) {
