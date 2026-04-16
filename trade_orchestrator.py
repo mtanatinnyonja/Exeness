@@ -306,6 +306,11 @@ class TradeOrchestrator:
                     self.memory.log_session(f"⚠️ {instrument}: ML proba faible ({ml_prob:.2f}) mais données insuffisantes ({inst_samples} samples) → on continue")
 
             self.last_signal_time[instrument] = datetime.utcnow()
+            learning_notes = ""
+            if learning["reasons"]:
+                learning_notes = f" MÉMOIRE ALERTE: {', '.join(learning['reasons'])}. Risque ajusté ×{learning['risk_multiplier']:.2f}."
+            if ml_eval.get('trained'):
+                learning_notes += f" ML proba: {ml_prob:.2f} (acc {ml_eval.get('accuracy', 'n/a')})."
             market_ctx = (
                 f"Spread actuel: {spread:.1f} pips. Heure UTC: {datetime.utcnow().hour}h. "
                 f"Broker: {getattr(self.broker, 'name', 'unknown')}. "
@@ -315,6 +320,7 @@ class TradeOrchestrator:
                 f"Support distance={details.get('distance_to_support_pips', 0)} pips. "
                 f"Resistance distance={details.get('distance_to_resistance_pips', 0)} pips. "
                 f"RiskReward buy={rr_buy:.2f}, sell={rr_sell:.2f}."
+                f"{learning_notes}"
             )
             chosen_rr = rr_buy if direction == "BUY" else rr_sell if direction == "SELL" else max(rr_buy, rr_sell)
             use_full_llm = self._should_use_full_llm(instrument, signal_h1, spread, chosen_rr, min_signal_required)

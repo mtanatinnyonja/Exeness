@@ -93,7 +93,7 @@ class LocalIntelligence:
         match = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*pips", market_context or "")
         return float(match.group(1)) if match else 0.0
 
-    def _compact_memory_context(self, raw_text: str, limit: int = 400) -> str:
+    def _compact_memory_context(self, raw_text: str, limit: int = 800) -> str:
         compact = " ".join(str(raw_text or "").split())
         return compact[:limit]
 
@@ -128,6 +128,12 @@ class LocalIntelligence:
         rr_buy = float(details.get("rr_buy", 0) or 0)
         rr_sell = float(details.get("rr_sell", 0) or 0)
         rr = rr_buy if direction == "BUY" else rr_sell if direction == "SELL" else 0.0
+        pattern = str(signal.get("pattern") or details.get("candle_pattern") or "unknown")
+
+        # Consulter la mémoire pour les filtres appris
+        learned_filters = self.memory.memory.get("learned_filters", [])
+        pattern_blocked = any(pattern.lower() in f.lower() for f in learned_filters)
+        ml_prob = float(signal.get("ml_probability", 0.5) or 0.5)
 
         trend_ok = (
             (direction == "BUY" and regime == "trend_bullish") or
@@ -139,15 +145,25 @@ class LocalIntelligence:
         score_ok = score >= MIN_SIGNAL_SCORE
 
         if direction in {"BUY", "SELL"} and trend_ok and bias_ok and rr_ok and score_ok:
-            confidence = min(0.82, round(0.52 + (score * 0.05) + min(0.1, abs(bias) * 0.03), 2))
+            # Bloquer si la mémoire a appris que ce pattern est perdant
+            if pattern_blocked:
+                return self._safe_wait(
+                    instrument,
+                    f"Pattern '{pattern}' bloqué par apprentissage mémoire. {reason}"
+                )
+            # Réduire la confiance si ML doute
+            base_conf = 0.52 + (score * 0.05) + min(0.1, abs(bias) * 0.03)
+            if ml_prob < 0.4:
+                base_conf *= 0.8
+            confidence = min(0.82, round(base_conf, 2))
             tp_pips = max(atr_pips * 2, int(round(atr_pips * max(1.6, min(3.0, rr)))))
             return {
                 "decision": direction,
                 "confidence": confidence,
                 "stop_loss_pips": atr_pips,
                 "take_profit_pips": tp_pips,
-                "reasoning": f"Fallback technique actif: score={score}/5, regime={regime}, bias={bias:.2f}, RR={rr:.2f}.",
-                "insight": f"{instrument}: {direction} via fallback technique avancé",
+                "reasoning": f"Fallback technique: score={score}/5, regime={regime}, bias={bias:.2f}, RR={rr:.2f}, ML={ml_prob:.2f}.",
+                "insight": f"{instrument}: {direction} via fallback technique (ML p={ml_prob:.2f})",
                 "risk_note": "technical_fallback",
             }
 

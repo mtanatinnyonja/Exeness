@@ -311,6 +311,7 @@ class AgentMemory:
         win_rate = self.get_win_rate()
         token_usage = self.get_token_usage_today()
         filters = self.memory.get("learned_filters", [])[-5:]
+        insights = self.memory.get("last_ai_insights", [])[-5:]
 
         return f"""
 === MÉMOIRE LOCALE AGENT ===
@@ -329,6 +330,9 @@ Meilleures heures:
 
 Filtres appris:
 {chr(10).join(filters) if filters else 'Aucun filtre bloquant pour le moment'}
+
+Insights IA précédents:
+{chr(10).join(insights) if insights else 'Première analyse'}
 
 Derniers trades:
 {json.dumps(recent, indent=2, ensure_ascii=False) if recent else 'Aucun trade encore'}
