@@ -693,6 +693,18 @@ HTML_PAGE = r"""<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- TRENDING PAIRS PANEL -->
+  <div class="ai-exchange" style="margin-bottom:16px;" id="trending-panel">
+    <div class="ai-exchange-header" onclick="toggleTrending()">
+      <span class="panel-title">📈 Paires en Tendance (Analyse Silencieuse)</span>
+      <span id="trending-badge" style="padding:2px 8px;border-radius:4px;font-size:0.75em;margin-left:8px;background:var(--green);color:#000;">—</span>
+      <span class="toggle-arrow" id="trending-arrow">▼</span>
+    </div>
+    <div class="ai-exchange-body" id="trending-body">
+      <div id="trending-table" style="font-size:0.85em;">Chargement...</div>
+    </div>
+  </div>
+
   <!-- AI EXCHANGE VIEWER -->
   <div class="ai-exchange" style="margin-bottom:16px;">
     <div class="ai-exchange-header" onclick="toggleAiExchange()">
@@ -918,6 +930,7 @@ let latestStatusPayload = null;
 let currentFocusPair = '';
 let rotationIndex = 0;
 let activeSymbolsList = [];
+let trendingPairsList = [];
 
 function fmtPnl(val) {
   const v = parseFloat(val) || 0;
@@ -1015,17 +1028,28 @@ function getFocusedPair() {
 }
 
 function getNextRotationPair() {
-  if (!activeSymbolsList.length) return '';
-  rotationIndex = (rotationIndex + 1) % activeSymbolsList.length;
-  currentFocusPair = activeSymbolsList[rotationIndex];
+  // Prioritize trending pairs (those with trending_score > 0)
+  const trending = trendingPairsList.filter(p => p.trending_score > 0).map(p => p.symbol);
+  const pool = trending.length ? trending : activeSymbolsList;
+  if (!pool.length) return '';
+  rotationIndex = (rotationIndex + 1) % pool.length;
+  currentFocusPair = pool[rotationIndex];
   return currentFocusPair;
 }
 
-function syncFocusPairs(symbols) {
+function syncFocusPairs(symbols, trending) {
   const visible = (symbols || []).filter(Boolean);
   if (visible.length) activeSymbolsList = visible;
+  trendingPairsList = trending || [];
   const label = document.getElementById('rotation-label');
-  if (label) label.textContent = 'Rotation auto : ' + visible.join(', ');
+  const trendingSyms = trendingPairsList.filter(p => p.trending_score > 0);
+  if (label) {
+    if (trendingSyms.length) {
+      label.textContent = '📈 Tendance : ' + trendingSyms.map(p => p.symbol + ' (' + (p.direction || '—') + ')').join(', ');
+    } else {
+      label.textContent = 'Rotation auto : ' + visible.join(', ');
+    }
+  }
 }
 
 function renderPairSnapshot(result) {
@@ -1269,6 +1293,64 @@ function toggleScanner() {
   const arrow = document.getElementById('scanner-arrow');
   if (body.style.display === 'none') { body.style.display = 'block'; arrow.textContent = '▼'; }
   else { body.style.display = 'none'; arrow.textContent = '▶'; }
+}
+
+function toggleTrending() {
+  const body = document.getElementById('trending-body');
+  const arrow = document.getElementById('trending-arrow');
+  if (body.style.display === 'none') { body.style.display = 'block'; arrow.textContent = '▼'; }
+  else { body.style.display = 'none'; arrow.textContent = '▶'; }
+}
+
+function renderTrending(pairs) {
+  if (!pairs || !pairs.length) return;
+  const badge = document.getElementById('trending-badge');
+  const tableDiv = document.getElementById('trending-table');
+  const trending = pairs.filter(p => p.trending_score > 0);
+  const neutral = pairs.filter(p => p.trending_score <= 0);
+
+  badge.textContent = trending.length + ' en tendance / ' + pairs.length + ' total';
+  badge.style.background = trending.length > 0 ? 'var(--green)' : 'var(--muted)';
+  badge.style.color = '#000';
+
+  if (pairs.length === 0) {
+    tableDiv.innerHTML = '<span style="color:var(--muted);">Aucune donnée</span>';
+    return;
+  }
+
+  let rows = pairs.map((p, i) => {
+    const isTrending = p.trending_score > 0;
+    const dirColor = p.direction === 'BUY' ? 'var(--green)' : p.direction === 'SELL' ? 'var(--red)' : 'var(--muted)';
+    const dirIcon = p.direction === 'BUY' ? '🟢' : p.direction === 'SELL' ? '🔴' : '⚪';
+    const regimeColor = (p.regime || '').includes('bullish') ? 'var(--green)' : (p.regime || '').includes('bearish') ? 'var(--red)' : 'var(--muted)';
+    const trendBar = Math.min(100, Math.round(p.trending_score * 10));
+    const bg = isTrending ? 'rgba(61,255,160,0.06)' : '';
+    return '<tr style="background:' + bg + ';">' +
+      '<td style="padding:4px 8px;color:var(--text);">' + (i + 1) + '</td>' +
+      '<td style="padding:4px 8px;font-weight:600;">' + p.symbol + (isTrending ? ' 🔥' : '') + '</td>' +
+      '<td style="padding:4px 8px;color:' + dirColor + ';">' + dirIcon + ' ' + (p.direction || '—') + '</td>' +
+      '<td style="padding:4px 8px;">' +
+        '<div style="display:flex;align-items:center;gap:4px;">' +
+          '<div style="width:60px;height:6px;background:var(--border);border-radius:3px;overflow:hidden;">' +
+            '<div style="width:' + trendBar + '%;height:100%;background:' + (isTrending ? 'var(--green)' : 'var(--muted)') + ';border-radius:3px;"></div>' +
+          '</div>' +
+          '<span style="font-size:0.8em;color:' + (isTrending ? 'var(--green)' : 'var(--muted)') + ';">' + p.trending_score.toFixed(1) + '</span>' +
+        '</div>' +
+      '</td>' +
+      '<td style="padding:4px 8px;color:' + regimeColor + ';font-size:0.82em;">' + (p.regime || '—') + '</td>' +
+      '<td style="padding:4px 8px;font-size:0.82em;">RSI ' + (p.rsi || 50).toFixed(0) + '</td>' +
+      '<td style="padding:4px 8px;font-size:0.82em;color:var(--accent);">' + (p.quality || 0).toFixed(2) + '</td></tr>';
+  }).join('');
+
+  tableDiv.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:0.82em;">' +
+    '<thead><tr style="border-bottom:1px solid var(--border2);color:var(--muted);">' +
+    '<th style="padding:4px 8px;text-align:left;">#</th>' +
+    '<th style="padding:4px 8px;text-align:left;">Paire</th>' +
+    '<th style="padding:4px 8px;text-align:left;">Direction</th>' +
+    '<th style="padding:4px 8px;text-align:left;">Score Tendance</th>' +
+    '<th style="padding:4px 8px;text-align:left;">Régime</th>' +
+    '<th style="padding:4px 8px;text-align:left;">RSI</th>' +
+    '<th style="padding:4px 8px;text-align:left;">Qualité</th></tr></thead><tbody>' + rows + '</tbody></table>';
 }
 
 function renderScanner(scan) {
@@ -1526,7 +1608,7 @@ async function fetchStatus() {
         ? 'Le cockpit affiche un signal IA en aperçu sur la paire active. Un ordre réel MT5 n\'est envoyé que par le cycle automatique quand toutes les validations sont encore confirmées.'
         : 'Le bot autonome analyse la paire active en continu. Active le trading réel démo pour autoriser les ouvertures et fermetures automatiques.';
     }
-    syncFocusPairs(data.active_symbols || []);
+    syncFocusPairs(data.active_symbols || [], data.trending_pairs || []);
 
     // Features bar
     const fb = document.getElementById('features-bar');
@@ -1556,6 +1638,7 @@ async function fetchStatus() {
     if (data.pro_strategies) renderStrategies(data.pro_strategies);
     if (data.market_protections) renderProtections(data.market_protections);
     if (data.smart_scan) renderScanner(data.smart_scan);
+    if (data.trending_pairs) renderTrending(data.trending_pairs);
 
     // Live snapshot rotation: show chart even before first AI call
     if (data.live_snapshot && data.live_snapshot.closes) {

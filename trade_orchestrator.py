@@ -160,6 +160,39 @@ class TradeOrchestrator:
             "closes": [round(v, 5) for v in closes[-30:]],
         }
 
+    def _rank_trending_pairs(self, symbols: List[str]) -> List[Dict]:
+        """Rank pairs by trending strength for dashboard prioritization."""
+        ranked = []
+        for sym in symbols:
+            try:
+                candles = self.broker.get_candles(sym, PRIMARY_TIMEFRAME, 60)
+                if not candles or len(candles) < 20:
+                    ranked.append({"symbol": sym, "trending_score": 0, "direction": None, "trend_strength": 0, "signal_bias": 0, "rsi": 50, "regime": "unknown", "quality": 0})
+                    continue
+                sig = calculate_signal_score(candles, sym)
+                det = sig.get("details", {}) or {}
+                trend_str = abs(float(det.get("trend_strength", 0) or 0))
+                sig_bias = abs(float(det.get("signal_bias", 0) or 0))
+                quality = float(det.get("quality_score", 0) or 0)
+                score = sig.get("score", 0)
+                # Trending score: combine signal strength, trend, and quality
+                trending = round(score * 0.3 + sig_bias * 0.3 + trend_str * 10 + quality * 2, 2)
+                ranked.append({
+                    "symbol": sym,
+                    "trending_score": trending,
+                    "direction": sig.get("direction"),
+                    "trend_strength": round(trend_str, 4),
+                    "signal_bias": float(det.get("signal_bias", 0) or 0),
+                    "rsi": float(det.get("rsi", 50) or 50),
+                    "regime": str(det.get("market_regime", "unknown")),
+                    "quality": quality,
+                    "score": score,
+                })
+            except Exception:
+                ranked.append({"symbol": sym, "trending_score": 0, "direction": None, "trend_strength": 0, "signal_bias": 0, "rsi": 50, "regime": "unknown", "quality": 0})
+        ranked.sort(key=lambda x: x["trending_score"], reverse=True)
+        return ranked
+
     def is_cooldown_active(self, instrument: str) -> bool:
         last_time = self.last_signal_time.get(instrument)
         if not last_time:
@@ -575,6 +608,21 @@ class TradeOrchestrator:
             instrument_positions = [p for p in self.broker.get_open_positions() if str(p.get("instrument", "")).upper() == instrument.upper()]
 
             if decision["decision"] in ["BUY", "SELL"]:
+                # Garde-fou qualité: bloquer les trades de faible confiance + faible qualité
+                trade_confidence = float(decision.get("confidence", 0) or 0)
+                quality_score = float(details.get("quality_score", 0) or 0)
+                if trade_confidence < 0.4 and quality_score < 0.3:
+                    self.memory.log_session(
+                        f"🛡️ {instrument}: BLOQUÉ confiance faible ({trade_confidence:.0%}) + qualité faible ({quality_score:.2f})"
+                    )
+                    decision = {**decision, "decision": "WAIT", "reasoning": f"Confiance trop faible ({trade_confidence:.0%}) et qualité insuffisante ({quality_score:.2f})"}
+                elif trade_confidence < 0.3:
+                    self.memory.log_session(
+                        f"🛡️ {instrument}: BLOQUÉ confiance très faible ({trade_confidence:.0%})"
+                    )
+                    decision = {**decision, "decision": "WAIT", "reasoning": f"Confiance très faible ({trade_confidence:.0%})"}
+
+            if decision["decision"] in ["BUY", "SELL"]:
                 if self._manage_existing_position(instrument, instrument_positions, decision):
                     return
                 self._execute_trade(instrument, decision, signal_h1, account)
@@ -708,11 +756,13 @@ class TradeOrchestrator:
                 still_open = True
 
             if not still_open:
-                # Try to get actual PnL from MT5 deal history (try position_ticket first, then broker_id)
-                pnl_est = self._get_deal_pnl(trade.get("position_ticket")) or self._get_deal_pnl(trade.get("broker_id"))
-                close_reason = "TP" if pnl_est and pnl_est > 0 else "SL" if pnl_est and pnl_est < 0 else "fermé"
+                # Try to get actual PnL from MT5 deal history (position_ticket first, then broker_id)
+                pnl_est = self._get_deal_pnl(trade.get("position_ticket"))
+                if pnl_est is None:
+                    pnl_est = self._get_deal_pnl(trade.get("broker_id"))
                 if pnl_est is None:
                     pnl_est = 0.0
+                close_reason = "TP" if pnl_est > 0 else "SL" if pnl_est < 0 else "fermé"
 
                 self.memory.update_trade(trade.get("id"), {
                     "status": "closed",
@@ -732,10 +782,25 @@ class TradeOrchestrator:
                     pass
 
     def _get_deal_pnl(self, order_id) -> Optional[float]:
-        """Get realized PnL from MT5 deal history for a given order."""
+        """Get realized PnL from MT5 deal history for a given order/position."""
         if not order_id or not hasattr(self.broker, 'mt5'):
             return None
         try:
+            oid = int(order_id)
+        except (ValueError, TypeError):
+            return None
+        try:
+            # Method 1: Direct position-based lookup (most reliable)
+            deals = self.broker.mt5.history_deals_get(position=oid)
+            if deals and len(deals) > 0:
+                total_pnl = 0.0
+                for deal in deals:
+                    total_pnl += float(getattr(deal, 'profit', 0)) + float(getattr(deal, 'swap', 0)) + float(getattr(deal, 'commission', 0))
+                return round(total_pnl, 2)
+        except Exception:
+            pass
+        try:
+            # Method 2: Scan recent deal history by order/position_id
             from datetime import timedelta
             start = datetime.utcnow() - timedelta(days=7)
             end = datetime.utcnow() + timedelta(hours=1)
@@ -745,7 +810,7 @@ class TradeOrchestrator:
             total_pnl = 0.0
             found = False
             for deal in deals:
-                if getattr(deal, 'order', None) == int(order_id) or getattr(deal, 'position_id', None) == int(order_id):
+                if getattr(deal, 'order', None) == oid or getattr(deal, 'position_id', None) == oid:
                     total_pnl += float(getattr(deal, 'profit', 0)) + float(getattr(deal, 'swap', 0)) + float(getattr(deal, 'commission', 0))
                     found = True
             return round(total_pnl, 2) if found else None
@@ -890,13 +955,22 @@ class TradeOrchestrator:
         active_symbols = self.get_target_instruments()
         market_status = self._get_market_status()
 
-        # Rotation live snapshot across all active pairs
+        # Trending-aware rotation: rank pairs by signal strength, show best first
         global _status_rotation_idx
         live_snapshot = None
+        trending_pairs = []
         if active_symbols:
-            _status_rotation_idx = (_status_rotation_idx + 1) % len(active_symbols)
+            # Quick signal scan for all active pairs (cached per cycle, lightweight)
             try:
-                live_snapshot = self._build_live_snapshot(active_symbols[_status_rotation_idx])
+                trending_pairs = self._rank_trending_pairs(active_symbols)
+            except Exception:
+                trending_pairs = [{"symbol": s, "trending_score": 0, "direction": None, "trend_strength": 0} for s in active_symbols]
+
+            # Pick the best trending pair for the live snapshot (rotate among top pairs)
+            ranked_symbols = [t["symbol"] for t in trending_pairs if t["trending_score"] > 0] or active_symbols
+            _status_rotation_idx = (_status_rotation_idx + 1) % len(ranked_symbols)
+            try:
+                live_snapshot = self._build_live_snapshot(ranked_symbols[_status_rotation_idx])
             except Exception as e:
                 self.memory.record_error("live_snapshot", str(e))
 
@@ -932,6 +1006,7 @@ class TradeOrchestrator:
             "learned_filters": self.memory.memory.get("learned_filters", [])[-5:],
             "runtime_mode": "local-only",
             "live_snapshot": live_snapshot,
+            "trending_pairs": trending_pairs,
             "last_ai_exchange": self.intelligence.get_last_exchange(),
             "economic_calendar": self._get_calendar_summary(),
             "pro_strategies": self._get_strategies_summary(active_symbols, positions),
