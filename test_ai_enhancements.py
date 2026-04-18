@@ -6,6 +6,8 @@ from datetime import datetime, timezone, timedelta
 
 from market_context import analyze_market_context
 from signal_filter import filter_signal_quality
+from trade_planner import plan_trade_idea
+from agent_communication import build_analyst_prompt
 
 
 class DummyMemory:
@@ -15,6 +17,19 @@ class DummyMemory:
     def get_trades_started_today(self):
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         return sum(1 for trade in self.trades if str(trade.get("timestamp", "")).startswith(today))
+
+    def get_recent_trade_count(self, minutes: int = 30):
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+        count = 0
+        for trade in self.trades:
+            ts = trade.get("timestamp", "")
+            try:
+                dt = datetime.fromisoformat(ts)
+            except Exception:
+                continue
+            if dt >= cutoff:
+                count += 1
+        return count
 
 
 def check(name, condition, detail=""):
@@ -78,6 +93,86 @@ def test_signal_filter():
     signal = {"score": 5, "direction": "BUY", "details": {"signal_bias": 1.0}}
     result = filter_signal_quality(signal, None, {"category": "trend"}, 0, memory, config)
     check("Plafond de trades journaliers bloque", result["blocked"], str(result))
+
+
+def test_trade_planner():
+    ctx = {
+        "signal": {"score": 5, "direction": "BUY", "details": {"signal_bias": 0.8}},
+        "market_context": {"category": "trend", "reason": "tendance confirmée"},
+        "signal_confirm": {"score": 4, "direction": "BUY"},
+        "spread": 1.2,
+        "session": {"label": "session active", "instrument_quality": 0.9},
+        "strategies": {"confluence": {"confluence_score": 4, "max_score": 5, "quality": "B"}},
+        "learning": {"reasons": [], "blocked": False},
+        "account": {"balance": 1000},
+        "today_pnl": 0.0,
+        "open_positions": [],
+    }
+    memory = DummyMemory([])
+    plan = plan_trade_idea(
+        ctx,
+        [],
+        {
+            "human_like_min_score": 3,
+            "human_like_min_bias": 0.5,
+            "max_open_positions": 2,
+            "max_trades_per_day": 4,
+            "trades_today": 0,
+            "recent_trades": 0,
+            "max_recent_trades": 2,
+        },
+    )
+    check("Planner accepte un setup fort", plan["decision"] == "BUY" and not plan["is_blocking"], str(plan))
+
+    weak_ctx = {**ctx, "signal": {"score": 2, "direction": "SELL", "details": {"signal_bias": 0.1}}}
+    weak_plan = plan_trade_idea(
+        weak_ctx,
+        [],
+        {
+            "human_like_min_score": 3,
+            "human_like_min_bias": 0.5,
+            "max_open_positions": 2,
+            "max_trades_per_day": 4,
+            "trades_today": 0,
+            "recent_trades": 0,
+            "max_recent_trades": 2,
+        },
+    )
+    check("Planner bloque un setup faible", weak_plan["is_blocking"], str(weak_plan))
+
+    busy_plan = plan_trade_idea(
+        ctx,
+        [],
+        {
+            "human_like_min_score": 3,
+            "human_like_min_bias": 0.5,
+            "max_open_positions": 2,
+            "max_trades_per_day": 4,
+            "trades_today": 4,
+            "recent_trades": 3,
+            "max_recent_trades": 2,
+            "target_trades_per_day": 2,
+            "min_trades_per_day": 1,
+        },
+    )
+    check("Planner bloque en cas de plafond de trades", busy_plan["is_blocking"], str(busy_plan))
+
+
+def test_agent_communication_prompt():
+    candles = [build_candle(100 + i * 0.1, 100 + (i - 1) * 0.1) for i in range(60)]
+    ctx = {
+        "signal": {"score": 4, "direction": "BUY", "details": {"signal_bias": 0.6, "rsi": 45}},
+        "market_context": {"category": "trend", "reason": "tendance claire"},
+        "strategies": {"confluence": {"confluence_score": 4, "max_score": 5, "quality": "B"}},
+        "spread": 1.5,
+        "news_ctx": "aucune",
+        "account": {"balance": 1000},
+        "today_pnl": 0.0,
+        "open_positions": [],
+        "trade_plan": {"direction": "BUY", "confidence": 0.7, "is_blocking": False, "notes": []},
+    }
+    prompt = build_analyst_prompt("EURUSDm", ctx)
+    check("Prompt Analyste contient le plan et le contexte", "Tu es l'Analyste" in prompt and "Plan initial" in prompt, prompt)
 
 
 def run_all():

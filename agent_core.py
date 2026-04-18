@@ -32,6 +32,10 @@ from settings import (
     ENABLE_SIGNAL_QUALITY_FILTER, SIGNAL_QUALITY_MIN_SCORE,
     SIGNAL_QUALITY_MIN_BIAS, ENABLE_MARKET_CONTEXT,
     MAX_TRADES_PER_DAY, TRADE_COOLDOWN_MINUTES,
+    ENABLE_HUMAN_LIKE_MODE, HUMAN_LIKE_MIN_SCORE,
+    HUMAN_LIKE_MIN_BIAS, HUMAN_LIKE_MAX_RECENT_TRADES,
+    HUMAN_LIKE_TARGET_TRADES_PER_DAY, HUMAN_LIKE_MIN_TRADES_PER_DAY,
+    ENABLE_AGENT_COMMUNICATION_MODE,
 )
 from signal_engine import (
     calculate_signal_score, build_price_action_description, _MIN_CANDLES,
@@ -39,6 +43,13 @@ from signal_engine import (
 from market_protection import run_all_protections
 from market_context import analyze_market_context
 from signal_filter import filter_signal_quality
+from trade_planner import plan_trade_idea
+from agent_communication import (
+    build_analyst_prompt as build_analyst_conversation_prompt,
+    build_risk_prompt as build_risk_conversation_prompt,
+    build_decider_prompt as build_decider_conversation_prompt,
+    build_reviewer_prompt,
+)
 from smart_strategies import (
     get_session_score, calculate_htf_bias, get_smart_money_context,
     build_strategies_context, check_correlation_risk,
@@ -107,6 +118,13 @@ class TradingAgent:
         self.market_context_enabled = bool(settings.get("enable_market_context", ENABLE_MARKET_CONTEXT))
         self.max_trades_per_day = int(settings.get("max_trades_per_day", MAX_TRADES_PER_DAY))
         self.trade_cooldown_minutes = int(settings.get("trade_cooldown_minutes", TRADE_COOLDOWN_MINUTES))
+        self.human_like_mode = bool(settings.get("enable_human_like_mode", ENABLE_HUMAN_LIKE_MODE))
+        self.human_like_min_score = int(settings.get("human_like_min_score", HUMAN_LIKE_MIN_SCORE))
+        self.human_like_min_bias = float(settings.get("human_like_min_bias", HUMAN_LIKE_MIN_BIAS))
+        self.human_like_max_recent_trades = int(settings.get("human_like_max_recent_trades", HUMAN_LIKE_MAX_RECENT_TRADES))
+        self.human_like_target_trades_per_day = int(settings.get("human_like_target_trades_per_day", HUMAN_LIKE_TARGET_TRADES_PER_DAY))
+        self.human_like_min_trades_per_day = int(settings.get("human_like_min_trades_per_day", HUMAN_LIKE_MIN_TRADES_PER_DAY))
+        self.agent_communication_enabled = bool(settings.get("enable_agent_communication_mode", ENABLE_AGENT_COMMUNICATION_MODE))
 
     # ═══════════════════════════════════════════════════════════════════
     # PUBLIC API
@@ -129,6 +147,33 @@ class TradingAgent:
             ctx["market_context"] = analyze_market_context(ctx["candles_h1"], instrument)
         else:
             ctx["market_context"] = {"category": "unknown", "reason": "désactivé"}
+
+        ctx["trades_today"] = self.memory.get_trades_started_today()
+        ctx["recent_trades"] = self.memory.get_recent_trade_count(self.trade_cooldown_minutes)
+
+        ctx["trade_plan"] = plan_trade_idea(
+            ctx,
+            open_positions,
+            {
+                "human_like_min_score": self.human_like_min_score,
+                "human_like_min_bias": self.human_like_min_bias,
+                "max_open_positions": int(self.store.get_settings().get("max_open_positions", 3)),
+                "max_trades_per_day": self.max_trades_per_day,
+                "trades_today": ctx["trades_today"],
+                "recent_trades": ctx["recent_trades"],
+                "max_recent_trades": self.human_like_max_recent_trades,
+                "target_trades_per_day": self.human_like_target_trades_per_day,
+                "min_trades_per_day": self.human_like_min_trades_per_day,
+            },
+        )
+
+        plan = ctx["trade_plan"]
+        self.memory.log_session(
+            f"🧭 {instrument}: Planner → {plan['direction']} conf={plan['confidence']:.2f} "
+            f"bloqué={plan['is_blocking']} notes={';'.join(plan.get('notes', []))}"
+        )
+        if self.human_like_mode and plan["is_blocking"]:
+            return self._wait(f"Planner: {plan['reasoning']}")
 
         # Step 2: Check hard blocks (no LLM needed)
         if ctx["protections"]["blocked"]:
@@ -193,7 +238,10 @@ class TradingAgent:
         # ═══ MULTI-AGENT PIPELINE ═══
 
         # Agent 1: ANALYSTE — identifie le setup
-        analyste_prompt = self._build_analyste_prompt(instrument, ctx)
+        if self.agent_communication_enabled:
+            analyste_prompt = build_analyst_conversation_prompt(instrument, ctx)
+        else:
+            analyste_prompt = self._build_analyste_prompt(instrument, ctx)
         self.last_prompt = analyste_prompt
         self.memory.log_session(f"📊 {instrument}: Agent Analyste en réflexion...")
 
@@ -220,7 +268,10 @@ class TradingAgent:
             return self._wait(f"Analyste: pas de setup clair ({analyste_dir} force={analyste_force})")
 
         # Agent 2: RISK MANAGER — évalue les risques
-        risk_prompt = self._build_risk_prompt(instrument, ctx, analyste_json)
+        if self.agent_communication_enabled:
+            risk_prompt = build_risk_conversation_prompt(instrument, ctx, analyste_json)
+        else:
+            risk_prompt = self._build_risk_prompt(instrument, ctx, analyste_json)
         self.memory.log_session(f"🛡️ {instrument}: Agent Risk Manager en réflexion...")
 
         risk_raw = self._call_ollama(risk_prompt, instrument, PROMPT_RISK)
@@ -243,7 +294,10 @@ class TradingAgent:
             return self._wait(f"Risk Manager bloque (risque={risk_score}/10): {risk_json.get('risk_notes', '')[:100]}")
 
         # Agent 3: DÉCIDEUR — arbitre final
-        decideur_prompt = self._build_decideur_prompt(instrument, ctx, analyste_json, risk_json)
+        if self.agent_communication_enabled:
+            decideur_prompt = build_decider_conversation_prompt(instrument, ctx, analyste_json, risk_json)
+        else:
+            decideur_prompt = self._build_decideur_prompt(instrument, ctx, analyste_json, risk_json)
         self.memory.log_session(f"⚖️ {instrument}: Agent Décideur en réflexion...")
 
         decideur_raw = self._call_ollama(decideur_prompt, instrument, PROMPT_DECIDEUR)
@@ -265,6 +319,23 @@ class TradingAgent:
             "risk": risk_json,
             "decideur": decision,
         }
+
+        if self.agent_communication_enabled:
+            reviewer_prompt = build_reviewer_prompt(instrument, ctx, analyste_json, risk_json, decision)
+            reviewer_raw = self._call_ollama(reviewer_prompt, instrument, PROMPT_DECIDEUR)
+            if reviewer_raw:
+                reviewer_json = self._extract_json(reviewer_raw) or {}
+                if reviewer_json.get("allow") is False:
+                    reason = reviewer_json.get("reasoning", "relecteur bloque")
+                    self.memory.log_session(f"📝 Relecteur → {instrument}: bloque | {reason}")
+                    self.last_raw_response += f"\n\nRELECTEUR:\n{reviewer_raw}"
+                    self.last_parsed_response["reviewer"] = reviewer_json
+                    return self._wait(f"Relecteur bloque: {reason}")
+                self.last_parsed_response["reviewer"] = reviewer_json
+                self.memory.log_session(
+                    f"📝 Relecteur → {instrument}: allow={reviewer_json.get('allow')} "
+                    f"reason={reviewer_json.get('reasoning', '')[:120]}"
+                )
 
         self.memory.log_session(
             f"⚖️ Décideur → {instrument}: {decision['decision']} "
@@ -507,6 +578,14 @@ Balance:{account.get('balance',0):.0f}$ Positions:{account.get('open_trades',0)}
             strat_text = strat_text[:400] + "..."
 
         market_context = ctx.get("market_context", {})
+        plan_text = ""
+        if ctx.get("trade_plan"):
+            plan = ctx["trade_plan"]
+            plan_text = (
+                f"Plan:{plan.get('direction','WAIT')} conf={plan.get('confidence',0):.2f} "
+                f"bloqué={plan.get('is_blocking')} notes={';'.join(plan.get('notes', []))}"
+            )
+
         return {
             "header": (
                 f"{instrument} Score:{signal['score']}/5 Dir:{signal.get('direction','WAIT')} "
@@ -516,6 +595,7 @@ Balance:{account.get('balance',0):.0f}$ Positions:{account.get('open_trades',0)}
                 f"Supp:{details.get('support',0)} Res:{details.get('resistance',0)} "
                 f"RR_buy:{details.get('rr_buy',0)} RR_sell:{details.get('rr_sell',0)}"
             ),
+            "plan": plan_text,
             "confirm": confirm_text,
             "pa": pa_text,
             "strat": strat_text,
@@ -527,7 +607,8 @@ Balance:{account.get('balance',0):.0f}$ Positions:{account.get('open_trades',0)}
 
     def _build_analyste_prompt(self, instrument: str, ctx: Dict) -> str:
         c = self._compact_context(instrument, ctx)
-        return f"""{c['header']}
+        plan_section = f"PLAN: {c['plan']}\n\n" if c.get('plan') else ""
+        return f"""{c['header']}\n{plan_section}
 {c['confirm']}
 
 PRICE ACTION:
