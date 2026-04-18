@@ -5,7 +5,7 @@ Apprentissage des trades, des horaires, des patterns et du budget LLM local.
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 from settings import MEMORY_FILE, TRADES_FILE, DAILY_TOKEN_BUDGET
 
@@ -281,6 +281,23 @@ class AgentMemory:
         if total == 0:
             return 0.0
         return (self.memory.get("winning_trades", 0) / total) * 100
+
+    def get_trades_started_today(self) -> int:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        return sum(1 for trade in self.trades if str(trade.get("timestamp", "")).startswith(today))
+
+    def get_recent_trade_count(self, minutes: int = 30) -> int:
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+        count = 0
+        for trade in self.trades:
+            ts = trade.get("timestamp", "")
+            try:
+                dt = datetime.fromisoformat(ts)
+            except Exception:
+                continue
+            if dt >= cutoff:
+                count += 1
+        return count
 
     def get_best_patterns(self) -> List[Dict]:
         patterns = []

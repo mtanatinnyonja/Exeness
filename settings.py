@@ -56,10 +56,21 @@ LLM_ANALYSIS_NOTES = os.getenv(
 LLM_MAX_CONTEXT_BARS = int(os.getenv("LLM_MAX_CONTEXT_BARS", "60"))
 ONLY_ALLOW_LOCAL_LLM = True
 
-# === FALLBACK TECHNIQUE (si LLM indisponible) ===
+# === LLM et IA ===
+# Le système doit pouvoir fonctionner sans LLM.
+LLM_ENABLED = os.getenv("LLM_ENABLED", "true").strip().lower() == "true"
+LLM_AS_FINAL_VALIDATOR = os.getenv("LLM_AS_FINAL_VALIDATOR", "false").strip().lower() == "true"
 # True  = utilise les signaux techniques purs si Ollama plante (score >= 4 requis)
 # False = WAIT systématique — comportement original, plus conservateur
 LLM_FALLBACK_TECHNICAL = os.getenv("LLM_FALLBACK_TECHNICAL", "true").strip().lower() == "true"
+
+# === FILTRES DE SIGNAL ET CONTEXTE MARCHE ===
+ENABLE_SIGNAL_QUALITY_FILTER = os.getenv("ENABLE_SIGNAL_QUALITY_FILTER", "true").strip().lower() == "true"
+SIGNAL_QUALITY_MIN_SCORE = int(os.getenv("SIGNAL_QUALITY_MIN_SCORE", "2"))
+SIGNAL_QUALITY_MIN_BIAS = float(os.getenv("SIGNAL_QUALITY_MIN_BIAS", "0.5"))
+ENABLE_MARKET_CONTEXT = os.getenv("ENABLE_MARKET_CONTEXT", "true").strip().lower() == "true"
+MAX_TRADES_PER_DAY = int(os.getenv("MAX_TRADES_PER_DAY", "4"))
+TRADE_COOLDOWN_MINUTES = int(os.getenv("TRADE_COOLDOWN_MINUTES", "30"))
 
 # === CAPITAL & RISK ===
 INITIAL_CAPITAL = 50.0

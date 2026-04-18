@@ -28,11 +28,17 @@ from settings import (
     MAX_LLM_CALLS_PER_DAY, DAILY_TOKEN_BUDGET,
     ONLY_ALLOW_LOCAL_LLM, PRIMARY_TIMEFRAME, CONFIRM_TIMEFRAME,
     DAILY_LOSS_LIMIT, LLM_FALLBACK_TECHNICAL,
+    LLM_ENABLED, LLM_AS_FINAL_VALIDATOR,
+    ENABLE_SIGNAL_QUALITY_FILTER, SIGNAL_QUALITY_MIN_SCORE,
+    SIGNAL_QUALITY_MIN_BIAS, ENABLE_MARKET_CONTEXT,
+    MAX_TRADES_PER_DAY, TRADE_COOLDOWN_MINUTES,
 )
 from signal_engine import (
     calculate_signal_score, build_price_action_description, _MIN_CANDLES,
 )
 from market_protection import run_all_protections
+from market_context import analyze_market_context
+from signal_filter import filter_signal_quality
 from smart_strategies import (
     get_session_score, calculate_htf_bias, get_smart_money_context,
     build_strategies_context, check_correlation_risk,
@@ -93,6 +99,14 @@ class TradingAgent:
         self.min_confidence = float(settings.get("llm_min_confidence", LLM_MIN_CONFIDENCE))
         self.max_calls = int(settings.get("max_llm_calls_per_day", MAX_LLM_CALLS_PER_DAY))
         self.token_budget = int(settings.get("daily_token_budget", DAILY_TOKEN_BUDGET))
+        self.llm_enabled = bool(settings.get("enable_llm", LLM_ENABLED))
+        self.llm_final_validator = bool(settings.get("llm_as_final_validator", LLM_AS_FINAL_VALIDATOR))
+        self.signal_filter_enabled = bool(settings.get("enable_signal_quality_filter", ENABLE_SIGNAL_QUALITY_FILTER))
+        self.signal_quality_min_score = int(settings.get("signal_quality_min_score", SIGNAL_QUALITY_MIN_SCORE))
+        self.signal_quality_min_bias = float(settings.get("signal_quality_min_bias", SIGNAL_QUALITY_MIN_BIAS))
+        self.market_context_enabled = bool(settings.get("enable_market_context", ENABLE_MARKET_CONTEXT))
+        self.max_trades_per_day = int(settings.get("max_trades_per_day", MAX_TRADES_PER_DAY))
+        self.trade_cooldown_minutes = int(settings.get("trade_cooldown_minutes", TRADE_COOLDOWN_MINUTES))
 
     # ═══════════════════════════════════════════════════════════════════
     # PUBLIC API
@@ -111,6 +125,11 @@ class TradingAgent:
         if ctx is None:
             return self._wait("Données insuffisantes pour analyser")
 
+        if self.market_context_enabled:
+            ctx["market_context"] = analyze_market_context(ctx["candles_h1"], instrument)
+        else:
+            ctx["market_context"] = {"category": "unknown", "reason": "désactivé"}
+
         # Step 2: Check hard blocks (no LLM needed)
         if ctx["protections"]["blocked"]:
             blocks = ctx["protections"]["hard_blocks"]
@@ -125,6 +144,11 @@ class TradingAgent:
             f"📊 {instrument}: score={signal['score']}/5 dir={signal.get('direction', 'WAIT')} "
             f"regime={details.get('market_regime', '?')} spread={ctx['spread']:.1f}p"
         )
+        self.memory.log_session(
+            f"🌍 {instrument}: contexte marché={ctx['market_context']['category']} "
+            f"({ctx['market_context']['reason']})"
+        )
+
         session = ctx["session"]
         self.memory.log_session(f"🕐 {instrument}: {session['label']} (qualité={session['instrument_quality']})")
 
@@ -144,6 +168,27 @@ class TradingAgent:
             if ctx["learning"]["blocked"]:
                 self.memory.log_session(f"🛡️ {instrument}: setup bloqué par la mémoire")
                 return self._wait("Setup bloqué par la mémoire locale")
+
+        if self.signal_filter_enabled:
+            filter_result = filter_signal_quality(
+                ctx["signal"],
+                ctx.get("signal_confirm"),
+                ctx["market_context"],
+                len(open_positions),
+                self.memory,
+                {
+                    "min_signal_score": self.signal_quality_min_score,
+                    "min_signal_bias": self.signal_quality_min_bias,
+                    "max_open_positions": int(self.store.get_settings().get("max_open_positions", 3)),
+                    "max_trades_per_day": self.max_trades_per_day,
+                    "trade_cooldown_minutes": self.trade_cooldown_minutes,
+                },
+            )
+            if filter_result["blocked"]:
+                self.memory.log_session(
+                    f"🚫 {instrument}: signal bloqué par filtre qualité — {filter_result['reason']}"
+                )
+                return self._wait(f"Filtre qualité signal: {filter_result['reason']}")
 
         # ═══ MULTI-AGENT PIPELINE ═══
 
@@ -461,10 +506,12 @@ Balance:{account.get('balance',0):.0f}$ Positions:{account.get('open_trades',0)}
         if len(strat_text) > 400:
             strat_text = strat_text[:400] + "..."
 
+        market_context = ctx.get("market_context", {})
         return {
             "header": (
                 f"{instrument} Score:{signal['score']}/5 Dir:{signal.get('direction','WAIT')} "
                 f"Regime:{details.get('market_regime','?')} "
+                f"Market:{market_context.get('category','?')} "
                 f"RSI:{details.get('rsi',50):.0f} Spread:{ctx['spread']:.1f}p ATR:{signal.get('atr_pips',0)}p "
                 f"Supp:{details.get('support',0)} Res:{details.get('resistance',0)} "
                 f"RR_buy:{details.get('rr_buy',0)} RR_sell:{details.get('rr_sell',0)}"
@@ -510,6 +557,36 @@ RISK: {'APPROUVÉ' if risk.get('approved') else 'BLOQUÉ'} risque={risk.get('ris
 
 {c['account']}"""
 
+    def _build_final_validator_prompt(self, instrument: str, ctx: Dict, decision: Dict) -> str:
+        c = self._compact_context(instrument, ctx)
+        return f"""Valide la décision finale pour {instrument}.
+
+CONTEXTE MARCHÉ:
+{c['header']}
+Contexte marché: {ctx['market_context']['category']} — {ctx['market_context']['reason']}
+
+DÉCISION CANDIDATE:
+Décision: {decision['decision']}
+Confiance: {decision['confidence']:.2f}
+SL: {decision['stop_loss_pips']}p TP: {decision['take_profit_pips']}p
+Reasoning: {decision.get('reasoning','')}
+
+Réponds uniquement en JSON: {{"allow":true/false,"reasoning":"court"}}"""
+
+    def _llm_final_validation(self, instrument: str, decision: Dict, ctx: Dict) -> Optional[Dict]:
+        prompt = self._build_final_validator_prompt(instrument, ctx, decision)
+        raw = self._call_ollama(prompt, instrument, PROMPT_DECIDEUR)
+        if raw is None:
+            self.memory.log_session(f"🧠 {instrument}: validateur LLM final indisponible")
+            return None
+        parsed = self._extract_json(raw) or {}
+        if "allow" not in parsed:
+            return None
+        return {
+            "allow": bool(parsed.get("allow", False)),
+            "reasoning": str(parsed.get("reasoning", "")),
+        }
+
     # ═══════════════════════════════════════════════════════════════════
     # LLM COMMUNICATION
     # ═══════════════════════════════════════════════════════════════════
@@ -535,6 +612,10 @@ RISK: {'APPROUVÉ' if risk.get('approved') else 'BLOQUÉ'} risque={risk.get('ris
 
     def _call_ollama(self, prompt: str, instrument: str, system_prompt: str = "") -> Optional[str]:
         """Appel LLM local avec 1 retry automatique après 5s si échec."""
+        if not self.llm_enabled:
+            self.memory.log_session(f"🔒 {instrument}: LLM désactivé par configuration")
+            self._llm_healthy = False
+            return None
         if requests is None:
             self.memory.record_error("agent", "package requests absent")
             self._llm_healthy = False
@@ -726,6 +807,14 @@ RISK: {'APPROUVÉ' if risk.get('approved') else 'BLOQUÉ'} risque={risk.get('ris
     def _validate(self, instrument: str, decision: Dict, ctx: Dict) -> Dict:
         if decision["decision"] == "WAIT":
             return decision
+
+        if self.llm_final_validator and self.llm_enabled:
+            validator = self._llm_final_validation(instrument, decision, ctx)
+            if validator is not None and not validator.get("allow", True):
+                self.memory.log_session(
+                    f"🧠 {instrument}: LLM final valideur bloque → {validator.get('reasoning','aucune raison')}"
+                )
+                return self._wait(f"LLM final bloque: {validator.get('reasoning','aucune raison')}")
 
         # Confidence check — le fallback technique a confidence=0.40,
         # ce qui est < min_confidence (0.60) donc il sera bloqué ici
