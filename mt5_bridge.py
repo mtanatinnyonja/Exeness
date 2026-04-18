@@ -23,6 +23,7 @@ class PaperBroker:
         self.safe_to_trade = False
         self.last_error = reason
         self.status_message = reason
+        self.mt5 = None
 
     def get_account_summary(self) -> Dict:
         return {
@@ -107,7 +108,7 @@ class PaperBroker:
         entry = ask if direction == "BUY" else bid
         pip = self._pip_size(instrument)
         return {
-            "broker_id": f"paper-{int(datetime.utcnow().timestamp())}",
+            "broker_id": f"paper-{int(datetime.now(timezone.utc).timestamp())}",
             "instrument": instrument,
             "direction": direction,
             "volume": round(volume, 2),
@@ -121,8 +122,14 @@ class PaperBroker:
     def close_position(self, instrument: str) -> Optional[float]:
         return 0.0
 
+    def list_visible_symbols(self) -> List[str]:
+        return []
+
     def get_active_symbols(self, fallback: Optional[List[str]] = None) -> List[str]:
         return []
+
+    def modify_position(self, ticket: int, new_sl: float = None, new_tp: float = None) -> bool:
+        return False
 
     def get_market_status(self, symbols: Optional[List[str]] = None, max_tick_age_sec: int = 3600) -> Dict:
         now = datetime.now(timezone.utc)
@@ -476,7 +483,7 @@ class MT5Broker:
 
         if not self.safe_to_trade:
             return {
-                "broker_id": f"paper-{int(datetime.utcnow().timestamp())}",
+                "broker_id": f"paper-{int(datetime.now(timezone.utc).timestamp())}",
                 "instrument": symbol,
                 "direction": direction,
                 "volume": round(volume, 2),
@@ -537,6 +544,35 @@ class MT5Broker:
             "take_profit": tp,
             "status": "open",
         }
+
+    def modify_position(self, ticket: int, new_sl: float = None, new_tp: float = None) -> bool:
+        self._ensure_ready()
+        if not self.safe_to_trade:
+            return False
+        pos = None
+        for p in (self.mt5.positions_get() or []):
+            if getattr(p, 'ticket', None) == int(ticket):
+                pos = p
+                break
+        if pos is None:
+            return False
+        symbol = pos.symbol
+        info = self.mt5.symbol_info(symbol)
+        digits = int(getattr(info, 'digits', 5) or 5)
+        sl = round(float(new_sl), digits) if new_sl is not None else float(getattr(pos, 'sl', 0.0) or 0.0)
+        tp = round(float(new_tp), digits) if new_tp is not None else float(getattr(pos, 'tp', 0.0) or 0.0)
+        request = {
+            'action': self.mt5.TRADE_ACTION_SLTP,
+            'symbol': symbol,
+            'position': int(ticket),
+            'sl': sl,
+            'tp': tp,
+            'magic': MT5_MAGIC_NUMBER,
+        }
+        result = self.mt5.order_send(request)
+        if result is None or result.retcode not in {self.mt5.TRADE_RETCODE_DONE, self.mt5.TRADE_RETCODE_DONE_PARTIAL}:
+            return False
+        return True
 
     def close_position(self, instrument: str) -> Optional[float]:
         self._ensure_ready()

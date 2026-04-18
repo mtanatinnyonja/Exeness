@@ -5,6 +5,17 @@ et option LLM local sur la machine.
 """
 
 import os
+from pathlib import Path
+
+# Charger .env si présent
+_env_path = Path(__file__).parent / ".env"
+if _env_path.exists():
+    with open(_env_path, encoding="utf-8") as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _key, _, _val = _line.partition("=")
+                os.environ.setdefault(_key.strip(), _val.strip())
 
 # === BROKER ===
 BROKER = "mt5"  # "mt5" | "demo"
@@ -77,8 +88,8 @@ ATR_PERIOD = 14
 
 # === TELEGRAM NOTIFICATIONS ===
 TELEGRAM_ENABLED = True
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8356692673:AAHMEOvUplwLpUQeYc3Y4oF4p65--0XYwnM").strip()
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "6013601728").strip()
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
 # === SÉLECTION DYNAMIQUE DES PAIRES ===
 # smart = scan toutes les paires visibles, filtre par spread + qualité, prend les meilleures

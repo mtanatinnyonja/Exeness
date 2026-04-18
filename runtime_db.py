@@ -6,7 +6,7 @@ et base SQLite pour l'apprentissage des signaux.
 import json
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from settings import (
@@ -142,7 +142,7 @@ class RuntimeStore:
 
     def update_settings(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         allowed_keys = set(self._defaults().keys())
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
             for key, value in payload.items():
                 if key not in allowed_keys:
@@ -164,7 +164,7 @@ class RuntimeStore:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    datetime.utcnow().isoformat(),
+                    datetime.now(timezone.utc).isoformat(),
                     instrument,
                     float(signal.get("score", 0)),
                     signal.get("direction"),

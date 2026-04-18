@@ -1,6 +1,6 @@
 """
-Orchestrateur principal du robot local.
-Flux: MT5 → signaux → mémoire → LLM local / règles → paper trade ou exécution MT5.
+Orchestrateur principal de l'agent de trading.
+Gère le cycle: instruments → agent IA → exécution → trailing → réconciliation.
 """
 
 import time
@@ -15,9 +15,8 @@ from settings import (
 from learning_store import AgentMemory
 from mt5_bridge import build_broker
 from signal_engine import calculate_signal_score, _MIN_CANDLES
-from local_llm import LocalIntelligence
+from agent_core import TradingAgent
 from runtime_db import RuntimeStore
-from ml_model import LocalSignalModel
 from economic_calendar import EconomicCalendar
 from smart_strategies import (
     get_session_score, calculate_htf_bias, get_smart_money_context,
@@ -34,8 +33,7 @@ class TradeOrchestrator:
         self.memory = AgentMemory()
         self.store = RuntimeStore()
         self.broker = build_broker()
-        self.intelligence = LocalIntelligence(self.memory)
-        self.ml_model = LocalSignalModel(self.store, self.broker)
+        self.agent = TradingAgent(self.broker, self.memory, self.store)
         self.calendar = EconomicCalendar()
         self.telegram = TelegramNotifier()
         self.last_signal_time = {}
@@ -43,7 +41,7 @@ class TradeOrchestrator:
 
         if not quiet:
             self.memory.log_session(
-                f"🚀 Robot démarré | broker={getattr(self.broker, 'name', 'unknown')} | ia={self.intelligence.provider}"
+                f"🚀 Agent démarré | broker={getattr(self.broker, 'name', 'unknown')} | ia={self.agent.provider}"
             )
             broker_note = getattr(self.broker, "status_message", "") or getattr(self.broker, "last_error", "")
             if broker_note:
@@ -51,7 +49,7 @@ class TradeOrchestrator:
             try:
                 self.telegram.notify_bot_started(
                     getattr(self.broker, 'name', 'unknown'),
-                    self.intelligence.provider,
+                    self.agent.provider,
                     self.get_target_instruments(),
                 )
             except Exception:
@@ -86,37 +84,6 @@ class TradeOrchestrator:
         if name.startswith(("BTC", "ETH")):
             return 120.0
         return 3.0
-
-    def _min_rr_required(self, instrument: str) -> float:
-        return 1.0 if str(instrument).upper().startswith("XAU") else 1.0
-
-    def _should_use_full_llm(self, instrument: str, signal: Dict, spread: float, chosen_rr: float, min_signal_required: int) -> bool:
-        """
-        Conditions assouplies pour que le LLM soit réellement utilisé.
-        Ancienne logique : 5 conditions cumulatives trop restrictives → LLM jamais déclenché.
-        Nouvelle logique : score suffisant + spread correct + au moins l'un des critères qualité.
-        """
-        details = signal.get("details", {}) or {}
-        score = int(signal.get("score", 0) or 0)
-        bias = abs(float(details.get("signal_bias", 0) or 0))
-        trend_strength = float(details.get("trend_strength", 0) or 0)
-        regime = str(details.get("market_regime", "unknown"))
-
-        # Conditions de base non-négociables
-        # On autorise l'analyse LLM un peu plus tôt pour éviter un bot silencieux.
-        if score < max(2, min_signal_required - 1):
-            return False
-        if spread > self._max_spread_allowed(instrument):
-            return False
-
-        # Au moins l'un des critères de qualité doit être rempli
-        quality_ok = (
-            chosen_rr >= self._min_rr_required(instrument)
-            or bias >= 1.0
-            or trend_strength >= 0.06
-            or regime in ("trend_bullish", "trend_bearish")
-        )
-        return quality_ok
 
     def _build_live_snapshot(self, instrument: str) -> Dict:
         candles_live = self.broker.get_candles(instrument, "M1", 60)
@@ -197,7 +164,7 @@ class TradeOrchestrator:
         last_time = self.last_signal_time.get(instrument)
         if not last_time:
             return False
-        elapsed = (datetime.utcnow() - last_time).total_seconds() / 60
+        elapsed = (datetime.now(timezone.utc) - last_time).total_seconds() / 60
         return elapsed < SIGNAL_COOLDOWN_MINUTES
 
     def get_target_instruments(self) -> List[str]:
@@ -361,7 +328,7 @@ class TradeOrchestrator:
             self.memory.log_session(f"⏳ {instrument}: cooldown actif")
             return
 
-        # Filtre calendrier économique — pause avant/après high impact news
+        # News filter
         try:
             news_check = self.calendar.should_pause_trading(instrument)
             if news_check["pause"]:
@@ -370,266 +337,41 @@ class TradeOrchestrator:
         except Exception as cal_err:
             self.memory.record_error("calendar", str(cal_err))
 
-        # Filtre session / Kill Zone (ICT) — advisory, pas de hard block
         try:
-            session_info = get_session_score(instrument)
-            self.memory.log_session(f"🕐 {instrument}: {session_info['label']} (qualité={session_info['instrument_quality']})")
-        except Exception as sess_err:
-            session_info = {"label": "?", "instrument_quality": 0.5, "is_kill_zone": False}
-            self.memory.record_error("session", str(sess_err))
+            open_positions = self.broker.get_open_positions()
 
-        try:
-            # Demande suffisamment de bougies pour le warm-up des indicateurs
-            candles_needed = max(120, _MIN_CANDLES + 10)
-            candles_h1 = self.broker.get_candles(instrument, PRIMARY_TIMEFRAME, candles_needed)
-            candles_m15 = self.broker.get_candles(instrument, CONFIRM_TIMEFRAME, 80)
+            # L'agent gère TOUT: technique, protections, HTF, SMC, mémoire, LLM
+            decision = self.agent.analyze(instrument, account, open_positions)
 
-            if len(candles_h1) < _MIN_CANDLES:
-                self.memory.log_session(
-                    f"⚠️ {instrument}: données insuffisantes ({len(candles_h1)}/{_MIN_CANDLES} bougies)"
-                )
-                return
-            if len(candles_m15) < 30:
-                self.memory.log_session(f"⚠️ {instrument}: données M15 insuffisantes")
-                return
-
-            signal_h1 = calculate_signal_score(candles_h1, instrument)
-            signal_m15 = calculate_signal_score(candles_m15, instrument)
-            score = signal_h1["score"]
-            direction = signal_h1["direction"]
-            details = signal_h1.get("details", {})
-            regime = details.get("market_regime", "unknown")
-            trend_strength = float(details.get("trend_strength", 0) or 0)
-
-            if signal_h1["direction"] == signal_m15["direction"] and signal_m15["score"] >= 2:
-                score += 1
-                self.memory.log_session(f"✅ {instrument}: alignement TF ({score}/6)")
-            else:
-                self.memory.log_session(f"📊 {instrument}: score H1={score}/5 | direction={direction}")
-            signal_h1["score"] = score
-
-            self.memory.log_session(
-                f"🧮 {instrument}: regime={regime} | trend={trend_strength:.3f} | "
-                f"RR buy={details.get('rr_buy', 0)} | RR sell={details.get('rr_sell', 0)}"
-            )
-            learning = self.memory.assess_setup(instrument, signal_h1)
-            if learning["reasons"]:
-                self.memory.log_session(f"🧠 {instrument}: mémoire → {', '.join(learning['reasons'])}")
-            if learning["blocked"]:
-                self.memory.log_session(f"🛡️ {instrument}: setup bloqué par la mémoire locale")
-                return
-
-            spread = self.broker.get_spread_pips(instrument)
-            max_spread = self._max_spread_allowed(instrument)
-            if spread > max_spread:
-                self.memory.log_session(f"⚠️ {instrument}: spread trop large ({spread:.1f} pips > {max_spread:.1f})")
-                return
-
-            # ── Protections anti-manipulation ──
-            try:
-                pip_sz = self.broker._pip_size(instrument)
-                protections = run_all_protections(
-                    instrument, candles_h1, spread, pip_sz,
-                    price=candles_h1[-1]["close"] if candles_h1 else None,
-                )
-                if protections["blocked"]:
-                    for hb in protections["hard_blocks"]:
-                        self.memory.log_session(f"🛡️ {instrument}: {hb}")
-                    return
-                protection_risk = protections["risk_adjustment"]
-                if protections["warnings"]:
-                    for w in protections["warnings"][:3]:
-                        self.memory.log_session(f"🔎 {instrument}: {w}")
-                protection_llm_ctx = protections["llm_context"]
-                liquidity_sweep = protections["liquidity_sweep"]
-                market_structure = protections["structure"]
-            except Exception as prot_err:
-                self.memory.record_error("protections", str(prot_err))
-                protection_risk = 1.0
-                protection_llm_ctx = ""
-                liquidity_sweep = {}
-                market_structure = {}
-
-            rr_buy = float(details.get("rr_buy", 0) or 0)
-            rr_sell = float(details.get("rr_sell", 0) or 0)
-            min_rr = self._min_rr_required(instrument)
-            # Le RR guard sera recalculé après la décision de l'IA (sur la direction finale)
-
-            try:
-                ml_eval = self.ml_model.evaluate_signal(signal_h1, spread)
-            except Exception as ml_err:
-                self.memory.record_error("ml_eval", str(ml_err))
-                ml_eval = {'trained': False, 'probability': 0.5, 'sample_count': 0, 'accuracy': None, 'source': 'fallback-error'}
-            self.memory.log_session(
-                f"🧠 ML local {instrument}: p={ml_eval.get('probability', 0):.2f} | "
-                f"samples={ml_eval.get('sample_count', 0)} | source={ml_eval.get('source', 'n/a')}"
-            )
-            signal_h1['ml_probability'] = ml_eval.get('probability', 0)
-            ml_prob = float(ml_eval.get('probability', 0) or 0)
-            if ml_eval.get('trained') and ml_prob < 0.35:
-                inst_samples = self.store.count_ml_samples_for(instrument)
-                if inst_samples >= 20:
-                    self.memory.log_session(f"🛡️ {instrument}: ML bloque le trade, proba trop faible ({ml_prob:.2f})")
-                    return
-                else:
-                    self.memory.log_session(f"⚠️ {instrument}: ML proba faible ({ml_prob:.2f}) mais données insuffisantes ({inst_samples} samples) → on continue")
-
-            self.last_signal_time[instrument] = datetime.utcnow()
-
-            # ── Stratégies professionnelles avancées ──
-            try:
-                candles_h4 = self.broker.get_candles(instrument, "H4", 60)
-                candles_d1 = self.broker.get_candles(instrument, "D1", 30)
-            except Exception:
-                candles_h4, candles_d1 = [], []
-
-            try:
-                pro_ctx = build_strategies_context(
-                    instrument, candles_h1, candles_h4, candles_d1,
-                    signal_direction=direction, signal_score=score,
-                    open_positions=self.broker.get_open_positions(),
-                )
-                htf_bias = pro_ctx["htf_bias"]
-                confluence = pro_ctx["confluence"]
-                correlation = pro_ctx["correlation"]
-                smc = pro_ctx["smart_money"]
-
-                # Log confluence
-                self.memory.log_session(
-                    f"🎯 {instrument}: Confluence={confluence['confluence_score']}/{confluence['max_score']} "
-                    f"({confluence['quality']}) | HTF={htf_bias.get('combined_bias', '?')} "
-                    f"| SMC={smc.get('smart_money_bias', '?')} ({smc.get('fvg_count', 0)} FVG, {smc.get('ob_count', 0)} OB)"
-                )
-
-                # Bloquer SEULEMENT si corrélation très forte (doublon de risque)
-                if correlation["blocked"]:
-                    self.memory.log_session(f"🔗 {instrument}: BLOQUÉ corrélation — {correlation['reason']}")
-                    return
-                if correlation["warnings"]:
-                    self.memory.log_session(f"🔗 {instrument}: {correlation['warnings'][0]}")
-
-                # Stratégies = advisory, ajustent le risque via pro_risk_factor
-                # Pas de hard block sur confluence/session — on laisse le LLM décider
-                pro_risk_factor = 1.0
-                if confluence["quality"] == "D":
-                    pro_risk_factor *= 0.5
-                    self.memory.log_session(f"⚠️ {instrument}: confluence faible ({confluence['quality']}) → risque ×0.5")
-                elif confluence["quality"] == "C":
-                    pro_risk_factor *= 0.7
-                if session_info.get("instrument_quality", 0.5) < 0.2:
-                    pro_risk_factor *= 0.6
-                    self.memory.log_session(f"⚠️ {instrument}: session morte → risque ×0.6")
-                if htf_bias.get("combined_bias") == "conflict":
-                    pro_risk_factor *= 0.5
-                    self.memory.log_session(f"⚠️ {instrument}: conflit HTF → risque ×0.5")
-
-                pro_llm_context = pro_ctx["llm_context"]
-            except Exception as strat_err:
-                self.memory.record_error("strategies", str(strat_err))
-                pro_llm_context = ""
-                pro_risk_factor = 1.0
-                confluence = {"confluence_score": 0, "quality": "?", "max_score": 5}
-                htf_bias = {}
-
-            learning_notes = ""
-            if learning["reasons"]:
-                learning_notes = f" MÉMOIRE ALERTE: {', '.join(learning['reasons'])}. Risque ajusté ×{learning['risk_multiplier']:.2f}."
-            if ml_eval.get('trained'):
-                learning_notes += f" ML proba: {ml_prob:.2f} (acc {ml_eval.get('accuracy', 'n/a')})."
-            market_ctx = (
-                f"Spread actuel: {spread:.1f} pips. Heure UTC: {datetime.utcnow().hour}h. "
-                f"Broker: {getattr(self.broker, 'name', 'unknown')}. "
-                f"Score technique brut: {score}/5. Direction brute: {direction or 'WAIT'}. "
-                f"Régime: {regime}. Trend strength: {trend_strength:.3f}. "
-                f"Momentum5={details.get('momentum_5', 0)}%. Momentum20={details.get('momentum_20', 0)}%. "
-                f"Support distance={details.get('distance_to_support_pips', 0)} pips. "
-                f"Resistance distance={details.get('distance_to_resistance_pips', 0)} pips. "
-                f"RiskReward buy={rr_buy:.2f}, sell={rr_sell:.2f}."
-                f"{learning_notes}"
-            )
-            # Ajouter le contexte stratégies pro
-            if pro_llm_context:
-                market_ctx += f"\nSTRATÉGIES PRO:\n{pro_llm_context}"
-            # Ajouter le contexte anti-manipulation + structure de marché
-            if protection_llm_ctx and "Aucune alerte" not in protection_llm_ctx:
-                market_ctx += f"\nPROTECTIONS MARCHÉ:\n{protection_llm_ctx}"
-            # Ajouter le contexte calendrier économique
-            try:
-                cal_ctx = self.calendar.get_context_for_llm(instrument)
-                if cal_ctx and "Pas d'événement" not in cal_ctx:
-                    market_ctx += f"\nCALENDRIER ÉCONOMIQUE:\n{cal_ctx}"
-            except Exception:
-                pass
-            chosen_rr = rr_buy if direction == "BUY" else rr_sell if direction == "SELL" else max(rr_buy, rr_sell)
-            use_full_llm = self._should_use_full_llm(instrument, signal_h1, spread, chosen_rr, min_signal_required)
-            if not use_full_llm and direction in {"BUY", "SELL"} and score >= max(2, min_signal_required - 1):
-                # Filet de sécurité: forcer ponctuellement une vraie consultation LLM
-                # pour éviter de rester bloqué en mode "rapide" pendant des heures.
-                # Permet au moins 1 appel LLM réel par instrument par cycle de ~10 analyses.
-                use_full_llm = self.memory.get_llm_calls_today() < max(6, len(instruments) * 2)
-            if use_full_llm:
-                decision = self.intelligence.analyze_signal(instrument, signal_h1, account, market_ctx, candles=candles_h1)
-                self.memory.log_session(f"🧠 {instrument}: validation complète par le LLM local")
-            else:
-                decision = self.intelligence.analyze_signal(instrument, signal_h1, account, market_ctx, fast_mode=True, candles=candles_h1)
-                self.memory.log_session(f"⚡ {instrument}: décision rapide locale (règles + mémoire)")
             if not decision:
                 return
 
-            # Recalculer le RR guard basé sur la direction finale de l'IA (pas la direction brute du signal)
-            final_dir = str(decision.get("decision", "")).upper()
-            if final_dir in ("BUY", "SELL"):
-                final_rr = rr_buy if final_dir == "BUY" else rr_sell
-                low_rr_guard = final_rr < min_rr
-            else:
-                low_rr_guard = False
+            self.last_signal_time[instrument] = datetime.now(timezone.utc)
 
-            # Garde-fou RR: réduit le risque (appliqué via rr_penalty dans risk_multiplier final)
-            if decision.get("decision") in ["BUY", "SELL"] and low_rr_guard:
-                self.memory.log_session(
-                    f"⚠️ {instrument}: RR faible ({final_rr:.2f} < {min_rr:.2f}) → risque réduit ×0.6"
-                )
+            # Record signal sample for history
+            signal = decision.get("signal", {})
+            self.store.record_signal_sample(instrument, signal, decision.get("spread", 0), decision)
 
-            if regime == "range" and score < min_signal_required and decision.get("decision") in ["BUY", "SELL"]:
-                self.memory.log_session(
-                    f"🛡️ {instrument}: ordre bloqué, marché en range avec score faible ({score}/{min_signal_required})"
-                )
-                decision = {
-                    **decision,
-                    "decision": "WAIT",
-                    "reasoning": f"Marché range + score insuffisant ({score}/{min_signal_required})",
-                }
-
-            self.store.record_signal_sample(instrument, signal_h1, spread, decision)
-
-            ml_boost = 1.1 if float(ml_eval.get('probability', 0) or 0) >= 0.60 else 1.0
-            rr_penalty = 0.6 if low_rr_guard and decision.get("decision") in ["BUY", "SELL"] else 1.0
-            decision["risk_multiplier"] = round(learning["risk_multiplier"] * ml_boost * rr_penalty * pro_risk_factor * protection_risk, 2)
-            instrument_positions = [p for p in self.broker.get_open_positions() if str(p.get("instrument", "")).upper() == instrument.upper()]
-
-            if decision["decision"] in ["BUY", "SELL"]:
-                # Garde-fou qualité: bloquer les trades de faible confiance + faible qualité
-                trade_confidence = float(decision.get("confidence", 0) or 0)
-                quality_score = float(details.get("quality_score", 0) or 0)
-                if trade_confidence < 0.4 and quality_score < 0.3:
-                    self.memory.log_session(
-                        f"🛡️ {instrument}: BLOQUÉ confiance faible ({trade_confidence:.0%}) + qualité faible ({quality_score:.2f})"
-                    )
-                    decision = {**decision, "decision": "WAIT", "reasoning": f"Confiance trop faible ({trade_confidence:.0%}) et qualité insuffisante ({quality_score:.2f})"}
-                elif trade_confidence < 0.3:
-                    self.memory.log_session(
-                        f"🛡️ {instrument}: BLOQUÉ confiance très faible ({trade_confidence:.0%})"
-                    )
-                    decision = {**decision, "decision": "WAIT", "reasoning": f"Confiance très faible ({trade_confidence:.0%})"}
-
-            if decision["decision"] in ["BUY", "SELL"]:
+            if decision["decision"] in ("BUY", "SELL"):
+                instrument_positions = [
+                    p for p in open_positions
+                    if str(p.get("instrument", "")).upper() == instrument.upper()
+                ]
                 if self._manage_existing_position(instrument, instrument_positions, decision):
                     return
-                self._execute_trade(instrument, decision, signal_h1, account)
+                self._execute_trade(instrument, decision, signal, account)
             else:
+                instrument_positions = [
+                    p for p in open_positions
+                    if str(p.get("instrument", "")).upper() == instrument.upper()
+                ]
                 if instrument_positions:
-                    self.memory.log_session(f"🧭 {instrument}: pas de nouveau trade, position existante surveillée automatiquement")
-                self.memory.log_session(f"⏸️ {instrument}: IA dit WAIT - {decision.get('reasoning', '')[:200]}")
+                    self.memory.log_session(
+                        f"🧭 {instrument}: position existante surveillée"
+                    )
+                self.memory.log_session(
+                    f"⏸️ {instrument}: WAIT — {decision.get('reasoning', '')[:200]}"
+                )
 
         except Exception as e:
             self.memory.record_error(f"analysis:{instrument}", str(e))
@@ -639,9 +381,9 @@ class TradeOrchestrator:
         direction = decision["decision"]
         atr = max(6, int(round(float(signal.get("atr_pips", 20) or 20))))
         raw_sl = int(decision.get("stop_loss_pips", atr) or atr)
-        # Use the LLM's structural SL if larger than ATR (structural = behind S/R level)
         sl_pips = max(atr, raw_sl)
-        rr_ratio = max(1.5, tp_pips_raw / sl_pips if (tp_pips_raw := int(decision.get("take_profit_pips", sl_pips * 2) or sl_pips * 2)) and sl_pips else 2.0)
+        raw_tp = int(decision.get("take_profit_pips", sl_pips * 2) or sl_pips * 2)
+        rr_ratio = max(1.5, raw_tp / sl_pips) if sl_pips > 0 else 2.0
         tp_pips = max(sl_pips, int(sl_pips * rr_ratio))
         confidence = float(decision.get("confidence", 0.5))
         risk_multiplier = float(decision.get("risk_multiplier", 1.0))
@@ -768,7 +510,7 @@ class TradeOrchestrator:
                     "status": "closed",
                     "pnl": round(pnl_est, 2),
                     "close_reason": close_reason,
-                    "closed_at": datetime.utcnow().isoformat(),
+                    "closed_at": datetime.now(timezone.utc).isoformat(),
                 })
                 emoji = "💰" if pnl_est >= 0 else "💸"
                 self.memory.log_session(
@@ -802,8 +544,8 @@ class TradeOrchestrator:
         try:
             # Method 2: Scan recent deal history by order/position_id
             from datetime import timedelta
-            start = datetime.utcnow() - timedelta(days=7)
-            end = datetime.utcnow() + timedelta(hours=1)
+            start = datetime.now(timezone.utc) - timedelta(days=7)
+            end = datetime.now(timezone.utc) + timedelta(hours=1)
             deals = self.broker.mt5.history_deals_get(start, end)
             if not deals:
                 return None
@@ -909,7 +651,7 @@ class TradeOrchestrator:
                     "confidence": 0.0,
                     "reasoning": "Aucun symbole visible dans MT5 pour lancer le test IA."
                 },
-                "provider": self.intelligence.provider,
+                "provider": self.agent.provider,
                 "spread": 0.0,
             }
 
@@ -919,23 +661,18 @@ class TradeOrchestrator:
         signal = calculate_signal_score(candles, target)
 
         spread = self.broker.get_spread_pips(target)
-        context = f"Mode test dashboard. Spread actuel: {spread:.1f} pips."
-        # Le test IA du dashboard doit vérifier le moteur réel (LLM), pas uniquement le fallback rapide.
-        decision = self.intelligence.analyze_signal(target, signal, account, context, fast_mode=False, candles=candles)
-        ml_eval = self.ml_model.evaluate_signal(signal, spread)
-        signal["ml_probability"] = ml_eval.get("probability", 0)
-        if isinstance(decision, dict):
-            decision["ml_probability"] = ml_eval.get("probability", 0)
-            decision["ml_trained"] = ml_eval.get("trained", False)
+        open_positions = self.broker.get_open_positions()
+        decision = self.agent.analyze(target, account, open_positions)
+        if not decision:
+            decision = {"decision": "WAIT", "confidence": 0.0, "reasoning": "Analyse indisponible"}
         return {
             "instrument": target,
             "signal": signal,
             "decision": decision,
-            "provider": self.intelligence.provider,
+            "provider": self.agent.provider,
             "spread": spread,
-            "ml_eval": ml_eval,
             "market_snapshot": self._build_live_snapshot(target),
-            "last_ai_exchange": self.intelligence.get_last_exchange(),
+            "last_ai_exchange": self.agent.get_last_exchange(),
         }
 
     def get_status(self, focus_symbol: str = "") -> Dict:
@@ -950,7 +687,7 @@ class TradeOrchestrator:
         runtime_settings = self.store.get_settings()
         ml_stats = self.store.get_ml_stats()
         ml_history = self.store.get_recent_ml_samples(28)
-        ml_model_state = self.ml_model.get_status()
+        ml_model_state = {"trained": False, "model_type": "removed", "sample_count": 0}
         llm_calls = self.memory.get_llm_calls_today()
         active_symbols = self.get_target_instruments()
         market_status = self._get_market_status()
@@ -976,7 +713,7 @@ class TradeOrchestrator:
 
         raw_logs = self.memory.memory.get("session_log", [])[-200:]
         return {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "market_open": bool(market_status.get("open")),
             "market_status": market_status,
             "active_symbols": active_symbols,
@@ -998,7 +735,7 @@ class TradeOrchestrator:
                 "status_message": getattr(self.broker, "status_message", ""),
             },
             "settings": runtime_settings,
-            "ai_provider": self.intelligence.provider,
+            "ai_provider": self.agent.provider,
             "token_usage": self.memory.get_token_usage_today(),
             "ml_stats": ml_stats,
             "ml_model_state": ml_model_state,
@@ -1007,7 +744,7 @@ class TradeOrchestrator:
             "runtime_mode": "local-only",
             "live_snapshot": live_snapshot,
             "trending_pairs": trending_pairs,
-            "last_ai_exchange": self.intelligence.get_last_exchange(),
+            "last_ai_exchange": self.agent.get_last_exchange(),
             "economic_calendar": self._get_calendar_summary(),
             "pro_strategies": self._get_strategies_summary(active_symbols, positions),
             "market_protections": self._get_protections_summary(active_symbols),

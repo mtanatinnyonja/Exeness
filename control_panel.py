@@ -18,7 +18,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Robot MT5 · Local Monitor</title>
+<title>Agent IA MT5 · Trading Autonome</title>
 <style>
   :root {
     --bg: #0a0a0f;
@@ -474,8 +474,8 @@ HTML_PAGE = r"""<!DOCTYPE html>
     <div class="logo">
       <div class="logo-icon">⚡</div>
       <div>
-        <div class="logo-text">Robot MT5 Local</div>
-        <div class="logo-sub">LOCAL · MT5 · SQLITE</div>
+        <div class="logo-text">Agent IA MT5</div>
+        <div class="logo-sub">AUTONOME · OLLAMA · MT5</div>
       </div>
     </div>
     <div style="display:flex;align-items:center;gap:12px">
@@ -505,9 +505,9 @@ HTML_PAGE = r"""<!DOCTYPE html>
         <div class="refresh-info" id="active-symbols" style="white-space:normal;line-height:1.6;">—</div>
       </div>
       <div>
-        <div class="kpi-label">ML / BDD</div>
+        <div class="kpi-label">Historique</div>
         <div class="kpi-value accent" id="ml-samples" style="font-size:16px;">0</div>
-        <div class="kpi-sub" id="ml-info">samples</div>
+        <div class="kpi-sub" id="ml-info">samples BDD</div>
       </div>
     </div>
     <div id="features-bar" style="display:flex;gap:6px;flex-wrap:wrap;padding:8px 16px 12px;border-top:1px solid var(--border);"></div>
@@ -618,7 +618,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
           <div class="mini-kpi"><div class="label">Instrument</div><div class="value" id="ai-live-symbol">—</div></div>
           <div class="mini-kpi"><div class="label">Décision</div><div class="value" id="ai-live-action">WAIT</div></div>
           <div class="mini-kpi"><div class="label">Confiance</div><div class="value" id="ai-live-confidence">0%</div></div>
-          <div class="mini-kpi"><div class="label">ML local</div><div class="value" id="ai-live-ml">0%</div></div>
+          <div class="mini-kpi"><div class="label">Spread</div><div class="value" id="ai-live-spread">—</div></div>
           <div class="mini-kpi"><div class="label">Auto</div><div class="value" id="ai-live-auto">ON · 45s</div></div>
         </div>
         <div class="market-deck">
@@ -969,11 +969,8 @@ function populateSettings(data) {
   document.getElementById('tg-status').textContent = (settings.telegram_enabled ?? true) ? 'actif' : 'désactivé';
 
   const ml = data.ml_stats || {};
-  const modelState = data.ml_model_state || {};
-  document.getElementById('ml-samples').textContent = modelState.sample_count || ml.samples || 0;
-  document.getElementById('ml-info').textContent = modelState.trained
-    ? 'modèle entraîné · acc ' + Math.round((parseFloat(modelState.accuracy || 0) || 0) * 100) + '%'
-    : 'bootstrap actif · avg score ' + ((ml.avg_score || 0).toFixed ? ml.avg_score.toFixed(2) : ml.avg_score || 0);
+  document.getElementById('ml-samples').textContent = ml.samples || 0;
+  document.getElementById('ml-info').textContent = 'signaux enregistrés';
 }
 
 function scheduleAutoSave() {
@@ -1118,14 +1115,12 @@ function renderAiDecision(result) {
   const signal = result.signal || {};
   const details = signal.details || {};
   const snap = result.market_snapshot || {};
-  const ml = result.ml_eval || {};
   const action = (d.decision || 'WAIT').toUpperCase();
   const klass = action === 'BUY' ? 'buy' : action === 'SELL' ? 'sell' : 'wait';
   const confidence = Math.round((parseFloat(d.confidence || 0) || 0) * 100);
-  const mlProb = Math.round((parseFloat(d.ml_probability ?? signal.ml_probability ?? ml.probability ?? 0) || 0) * 100);
+  const spreadVal = parseFloat(result.spread ?? snap.spread ?? 0) || 0;
   const humanSummary = snap.human_summary || details.human_summary || '';
   const reasoning = d.reasoning || '';
-  // Avoid duplicate: if reasoning already contains the human summary, show only reasoning
   const displayText = reasoning && humanSummary && reasoning.includes(humanSummary.slice(0, 30))
     ? reasoning
     : [reasoning, humanSummary].filter(Boolean).join(' · ') || 'Analyse en attente.';
@@ -1133,14 +1128,14 @@ function renderAiDecision(result) {
   document.getElementById('ai-live-symbol').textContent = result.instrument || '—';
   document.getElementById('ai-live-action').innerHTML = '<span class="ai-pill ' + klass + '">' + action + '</span>';
   document.getElementById('ai-live-confidence').textContent = confidence + '%';
-  document.getElementById('ai-live-ml').textContent = mlProb + '%';
+  document.getElementById('ai-live-spread').textContent = spreadVal.toFixed(1) + 'p';
   const rr = action === 'SELL' ? (details.rr_sell ?? snap.rr_sell ?? 0) : (details.rr_buy ?? snap.rr_buy ?? 0);
   document.getElementById('ai-live-decision').innerHTML =
     '<strong>' + (result.instrument || '—') + '</strong> · ' +
     '<span class="ai-pill ' + klass + '">' + action + '</span>' +
     ' Score ' + (signal.score || 0) + '/5 · Régime ' + (details.market_regime || snap.regime || '—') +
     ' · RR ' + (parseFloat(rr) || 0).toFixed(2) +
-    ' · ML ' + mlProb + '%' +
+    ' · Spread ' + spreadVal.toFixed(1) + 'p' +
     '<br>' + displayText;
   renderPairSnapshot(result);
 }
@@ -1543,10 +1538,9 @@ async function testAI() {
       const liveMode = document.getElementById('setting-allow-trade').value === 'true'
         ? 'mode réel démo actif'
         : 'mode aperçu actif';
-      const mlProb = Math.round((parseFloat(d.ml_probability ?? data.result?.ml_eval?.probability ?? 0) || 0) * 100);
       document.getElementById('ai-test-result').textContent =
         'Signal IA aperçu · ' + (data.result?.instrument || '—') + ' · ' +
-        (d.decision || 'WAIT') + ' · confiance ' + Math.round((parseFloat(d.confidence || 0) || 0) * 100) + '% · ML ' + mlProb + '% · ' + liveMode + ' · ordre réel uniquement si le cycle d\'exécution confirme encore le setup.';
+        (d.decision || 'WAIT') + ' · confiance ' + Math.round((parseFloat(d.confidence || 0) || 0) * 100) + '% · ' + liveMode + ' · ordre réel uniquement si le cycle d\'exécution confirme encore le setup.';
     } else {
       document.getElementById('ai-test-result').textContent = 'Erreur test IA: ' + (data.error || 'inconnue');
     }
@@ -1619,7 +1613,7 @@ async function fetchStatus() {
         {label: '🛡️ Protections', on: true},
         {label: '📰 Calendrier', on: true},
         {label: '🎯 Stratégies Pro', on: true},
-        {label: '🧠 ML Local', on: (data.ml_model_state?.sample_count || 0) > 0},
+        {label: '🧠 Agent CoT', on: true},
         {label: '💧 Liquidity Sweep', on: !!data.market_protections?.liquidity_sweep},
         {label: '📐 BOS/CHoCH', on: !!(data.market_protections?.bos || data.market_protections?.choch)},
         {label: allowTrade ? '✅ Trading Actif' : '⏸️ Paper Mode', on: allowTrade},
@@ -1649,7 +1643,6 @@ async function fetchStatus() {
         market_snapshot: data.live_snapshot,
         signal: {},
         decision: { decision: 'WAIT', confidence: 0, reasoning: "En attente d'analyse IA\u2026" },
-        ml_eval: {},
       };
       renderAiDecision(livePayload);
     } else if (lastAiPayload) {

@@ -26,7 +26,8 @@ class TelegramNotifier:
 
     def _refresh_config(self):
         settings = self.store.get_settings()
-        self.enabled = str(settings.get("telegram_enabled", "true")).lower() == "true"
+        raw_enabled = settings.get("telegram_enabled", True)
+        self.enabled = bool(raw_enabled) if isinstance(raw_enabled, bool) else str(raw_enabled).lower() in {"true", "1", "yes"}
         self.bot_token = str(settings.get("telegram_bot_token", "")).strip()
         self.chat_id = str(settings.get("telegram_chat_id", "")).strip()
 

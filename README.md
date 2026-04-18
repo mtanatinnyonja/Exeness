@@ -1,13 +1,12 @@
-# Robot MT5 Local
+# Agent IA Trading MT5
 
-Bot de trading autonome MT5 en mode 100% local.
+Agent de trading autonome MT5 en mode 100% local.
 
 ## Architecture
 
 - **MT5 Broker** : Exness-MT5Trial9 (démo), connexion directe via MetaTrader5 Python
-- **IA locale** : Ollama (qwen2.5:3b) en localhost — aucun appel cloud
-- **ML local** : modèle logistic regression entraîné depuis SQLite (`data/local_runtime.db`)
-- **Mémoire persistante** : `data/agent_memory.json` + `data/trades_history.json`
+- **Agent IA** : Chain-of-Thought via Ollama (qwen2.5:3b) en localhost — aucun appel cloud
+- **Mémoire persistante** : `data/agent_memory.json` + `data/trades_history.json` + SQLite (`data/local_runtime.db`)
 - **Dashboard web** : cockpit temps réel sur http://localhost:8765
 
 ## Fichiers
@@ -17,13 +16,16 @@ Bot de trading autonome MT5 en mode 100% local.
 | `settings.py` | Configuration (paires, risque, seuils) |
 | `run_bot.py` | Point d'entrée cycles de trading |
 | `main.py` | Alias compatible (redirige vers run_bot) |
-| `trade_orchestrator.py` | Logique principale : signaux → IA → exécution |
+| `agent_core.py` | Cerveau de l'agent : Chain-of-Thought, appel LLM, décision |
+| `trade_orchestrator.py` | Orchestration : cycles, exécution, gestion positions |
 | `mt5_bridge.py` | Connexion MT5 + paper broker + money management |
 | `signal_engine.py` | Indicateurs techniques et scoring (RSI, ATR, RR, régime) |
-| `local_llm.py` | Intelligence locale (Ollama / fallback règles) |
+| `smart_strategies.py` | HTF bias, SMC, confluence, corrélation |
+| `market_protection.py` | Protections anti-manipulation, structure de marché |
+| `economic_calendar.py` | Calendrier économique, filtre news |
 | `learning_store.py` | Mémoire agent, trades, stats, patterns |
-| `runtime_db.py` | SQLite : réglages + échantillons ML |
-| `ml_model.py` | Modèle ML local (logistic regression) |
+| `runtime_db.py` | SQLite : réglages + échantillons |
+| `telegram_notifier.py` | Notifications Telegram (optionnel) |
 | `control_panel.py` | Dashboard web (HTML/JS/CSS embarqué) |
 | `dashboard.py` | Serveur HTTP pour le dashboard |
 

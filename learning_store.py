@@ -5,7 +5,7 @@ Apprentissage des trades, des horaires, des patterns et du budget LLM local.
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List
 from settings import MEMORY_FILE, TRADES_FILE, DAILY_TOKEN_BUDGET
 
@@ -30,7 +30,7 @@ class AgentMemory:
 
     def _load_memory(self) -> Dict:
         return self._safe_load_json(self.memory_file, {
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
             "total_trades": 0,
             "winning_trades": 0,
             "losing_trades": 0,
@@ -69,7 +69,7 @@ class AgentMemory:
 
     # === LLM / TOKEN BUDGET ===
     def increment_llm_calls(self) -> int:
-        today = datetime.utcnow().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if self.memory.get("llm_calls_date") != today:
             self.memory["llm_calls_today"] = 0
             self.memory["llm_calls_date"] = today
@@ -78,13 +78,13 @@ class AgentMemory:
         return self.memory["llm_calls_today"]
 
     def get_llm_calls_today(self) -> int:
-        today = datetime.utcnow().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if self.memory.get("llm_calls_date") != today:
             return 0
         return int(self.memory.get("llm_calls_today", 0))
 
     def record_token_usage(self, prompt_tokens: int = 0, completion_tokens: int = 0):
-        today = datetime.utcnow().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         usage = self.memory.setdefault("token_usage", {"date": today, "prompt_tokens": 0, "completion_tokens": 0})
         if usage.get("date") != today:
             usage["date"] = today
@@ -96,7 +96,7 @@ class AgentMemory:
 
     def get_token_usage_today(self) -> Dict:
         usage = self.memory.get("token_usage", {})
-        today = datetime.utcnow().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if usage.get("date") != today:
             return {"date": today, "prompt_tokens": 0, "completion_tokens": 0, "budget": DAILY_TOKEN_BUDGET}
         return {
@@ -108,7 +108,7 @@ class AgentMemory:
 
     # === FEEDBACK / ERREURS ===
     def record_error(self, source: str, message: str):
-        entry = f"[{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}] {source}: {message}"
+        entry = f"[{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}] {source}: {message}"
         self.memory.setdefault("error_log", []).append(entry)
         self.memory["error_log"] = self.memory["error_log"][-50:]
         self.save()
@@ -130,7 +130,7 @@ class AgentMemory:
             reasons.append("instrument en sous-performance")
             risk_multiplier *= 0.75
 
-        hour_stats = self.memory.get("hour_stats", {}).get(str(datetime.utcnow().hour), {})
+        hour_stats = self.memory.get("hour_stats", {}).get(str(datetime.now(timezone.utc).hour), {})
         if hour_stats.get("trades", 0) >= 4:
             win_rate = (hour_stats.get("wins", 0) / hour_stats.get("trades", 1)) * 100
             if win_rate < 35:
@@ -147,7 +147,7 @@ class AgentMemory:
     # === GESTION DES TRADES ===
     def add_trade(self, trade: Dict):
         trade["id"] = len(self.trades) + 1
-        trade["timestamp"] = datetime.utcnow().isoformat()
+        trade["timestamp"] = datetime.now(timezone.utc).isoformat()
         self.trades.append(trade)
         self._update_stats(trade)
         self.save()
@@ -170,7 +170,7 @@ class AgentMemory:
         self.memory["instrument_stats"][instrument]["trades"] += 1
         self.memory["total_trades"] += 1
 
-        hour_key = str(datetime.utcnow().hour)
+        hour_key = str(datetime.now(timezone.utc).hour)
         if hour_key not in self.memory["hour_stats"]:
             self.memory["hour_stats"][hour_key] = {"trades": 0, "wins": 0, "total_pnl": 0.0}
         self.memory["hour_stats"][hour_key]["trades"] += 1
@@ -179,7 +179,7 @@ class AgentMemory:
         pnl = float(trade.get("pnl", 0))
         instrument = trade.get("instrument", "unknown")
         pattern = trade.get("pattern", "unknown")
-        today = datetime.utcnow().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         # Guard: avoid double-counting if stats already finalized for this trade
         if trade.get("_stats_finalized"):
@@ -273,7 +273,7 @@ class AgentMemory:
     # === STATS UTILES ===
     def get_daily_pnl(self, date: str = None) -> float:
         if date is None:
-            date = datetime.utcnow().strftime("%Y-%m-%d")
+            date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         return float(self.memory.get("daily_pnl", {}).get(date, 0.0))
 
     def get_win_rate(self) -> float:
@@ -340,13 +340,13 @@ Derniers trades:
 
     def add_ai_insight(self, insight: str):
         self.memory.setdefault("last_ai_insights", []).append(
-            f"[{datetime.utcnow().strftime('%Y-%m-%d %H:%M')}] {insight}"
+            f"[{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}] {insight}"
         )
         self.memory["last_ai_insights"] = self.memory["last_ai_insights"][-20:]
         self.save()
 
     def log_session(self, message: str):
-        entry = f"[{datetime.utcnow().strftime('%H:%M:%S')}] {message}"
+        entry = f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] {message}"
         self.memory.setdefault("session_log", []).append(entry)
         self.memory["session_log"] = self.memory["session_log"][-300:]
         try:

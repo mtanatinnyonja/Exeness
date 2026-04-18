@@ -493,7 +493,7 @@ def check_correlation_risk(
     Si on est déjà long EURUSD, on ne doit pas ouvrir long GBPUSD (même basket).
     """
     if not open_positions:
-        return {"blocked": False, "reason": "Pas de position ouverte — pas de risque de corrélation"}
+        return {"blocked": False, "warnings": [], "reason": "Pas de position ouverte — pas de risque de corrélation"}
 
     inst_upper = instrument.upper()
     warnings = []
