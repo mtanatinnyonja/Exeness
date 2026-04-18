@@ -1607,7 +1607,7 @@ async function fetchStatus() {
         {label: '🛡️ Protections', on: true},
         {label: '📰 Calendrier', on: true},
         {label: '🎯 Stratégies Pro', on: true},
-        {label: '🧠 Agent CoT', on: true},
+        {label: '🧠 Multi-Agents', on: true},
         {label: '💧 Liquidity Sweep', on: !!data.market_protections?.liquidity_sweep},
         {label: '📐 BOS/CHoCH', on: !!(data.market_protections?.bos || data.market_protections?.choch)},
         {label: allowTrade ? '✅ Trading Actif' : '⏸️ Paper Mode', on: allowTrade},

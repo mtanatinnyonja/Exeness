@@ -1,8 +1,11 @@
 """
-Agent IA de trading autonome.
+Agent IA de trading autonome — Architecture Multi-Agents.
 
-Architecture: Observation → Raisonnement en chaîne (CoT) → Décision
-Le LLM est le décideur principal, pas un simple validateur.
+3 agents spécialisés collaborent via pipeline séquentiel:
+  1. Analyste    — lit le marché, identifie le setup
+  2. Risk Manager — évalue les risques, valide ou bloque
+  3. Décideur    — arbitre final, ne trade que sur consensus
+
 Si le LLM est indisponible, l'agent attend — pas de fallback automatique.
 """
 
@@ -36,9 +39,17 @@ from economic_calendar import EconomicCalendar
 from runtime_db import RuntimeStore
 
 
-SYSTEM_PROMPT = """Agent trading MT5. Raisonne puis décide.
-Règles: structure claire sinon WAIT, SL derrière niveau structurel, RR>=1.5, doute=WAIT.
-JSON uniquement: {"thinking":"...","decision":"BUY|SELL|WAIT","confidence":0.0-1.0,"stop_loss_pips":N,"take_profit_pips":N,"reasoning":"court"}"""
+PROMPT_ANALYSTE = """Tu es l'ANALYSTE technique. Lis la structure price action, identifie le régime et le setup.
+JSON uniquement: {"setup":"description courte","direction":"BUY|SELL|NEUTRAL","force":1-5,"key_levels":"support/resistance","reasoning":"court"}"""
+
+PROMPT_RISK = """Tu es le RISK MANAGER. Évalue les risques du setup proposé par l'Analyste.
+Vérifie: spread vs ATR, session, protections, corrélation, news. Bloque si dangereux.
+JSON uniquement: {"approved":true/false,"risk_score":1-10,"sl_pips":N,"tp_pips":N,"risk_notes":"raisons","reasoning":"court"}"""
+
+PROMPT_DECIDEUR = """Tu es le DÉCIDEUR final. Tu vois l'analyse et l'évaluation des risques.
+Trade UNIQUEMENT si: l'Analyste a un setup clair ET le Risk Manager approuve ET RR>=1.5.
+En cas de doute ou désaccord → WAIT.
+JSON uniquement: {"decision":"BUY|SELL|WAIT","confidence":0.0-1.0,"stop_loss_pips":N,"take_profit_pips":N,"reasoning":"court"}"""
 
 
 class TradingAgent:
@@ -79,8 +90,7 @@ class TradingAgent:
 
     def analyze(self, instrument: str, account: Dict, open_positions: List[Dict]) -> Optional[Dict]:
         """
-        Analyse complète d'un instrument.
-        Gather context → Reason (CoT) → Decide.
+        Analyse multi-agents: Analyste → Risk Manager → Décideur.
         """
         self._load_settings()
         self.last_analysis_instrument = instrument
@@ -125,29 +135,92 @@ class TradingAgent:
                 self.memory.log_session(f"🛡️ {instrument}: setup bloqué par la mémoire")
                 return self._wait("Setup bloqué par la mémoire locale")
 
-        # Step 4: THINK — build prompt and call LLM
-        prompt = self._build_cot_prompt(instrument, ctx)
-        self.last_prompt = prompt
+        # ═══ MULTI-AGENT PIPELINE ═══
 
-        raw = self._call_ollama(prompt, instrument)
-        if raw is None:
+        # Agent 1: ANALYSTE — identifie le setup
+        analyste_prompt = self._build_analyste_prompt(instrument, ctx)
+        self.last_prompt = analyste_prompt
+        self.memory.log_session(f"📊 {instrument}: Agent Analyste en réflexion...")
+
+        analyste_raw = self._call_ollama(analyste_prompt, instrument, PROMPT_ANALYSTE)
+        if analyste_raw is None:
             self.memory.log_session(f"⏸️ {instrument}: LLM indisponible — WAIT")
             return self._wait("LLM indisponible — pas de trade sans analyse")
 
-        self.last_raw_response = raw
+        analyste_json = self._extract_json(analyste_raw) or {}
+        analyste_dir = str(analyste_json.get("direction", "NEUTRAL")).upper()
+        analyste_force = int(analyste_json.get("force", 0) or 0)
+        self.memory.log_session(
+            f"📊 Analyste → {instrument}: {analyste_dir} force={analyste_force}/5 | "
+            f"{analyste_json.get('reasoning', '')[:150]}"
+        )
 
-        # Step 5: Parse decision from reasoning
-        decision = self._parse_decision(raw, ctx)
-        self.last_parsed_response = decision
+        # Si l'Analyste ne voit rien → stop
+        if analyste_dir == "NEUTRAL" or analyste_force < 2:
+            self.last_raw_response = analyste_raw
+            self.last_parsed_response = {"analyste": analyste_json}
+            return self._wait(f"Analyste: pas de setup clair ({analyste_dir} force={analyste_force})")
+
+        # Agent 2: RISK MANAGER — évalue les risques
+        risk_prompt = self._build_risk_prompt(instrument, ctx, analyste_json)
+        self.memory.log_session(f"🛡️ {instrument}: Agent Risk Manager en réflexion...")
+
+        risk_raw = self._call_ollama(risk_prompt, instrument, PROMPT_RISK)
+        if risk_raw is None:
+            self.last_raw_response = analyste_raw
+            return self._wait("Risk Manager indisponible — WAIT par sécurité")
+
+        risk_json = self._extract_json(risk_raw) or {}
+        approved = risk_json.get("approved", False)
+        risk_score = int(risk_json.get("risk_score", 10) or 10)
+        self.memory.log_session(
+            f"🛡️ Risk → {instrument}: {'✅ approuvé' if approved else '❌ bloqué'} "
+            f"risque={risk_score}/10 | {risk_json.get('reasoning', '')[:150]}"
+        )
+
+        # Si le Risk Manager bloque → stop
+        if not approved or risk_score >= 8:
+            self.last_raw_response = f"ANALYSTE:\n{analyste_raw}\n\nRISK:\n{risk_raw}"
+            self.last_parsed_response = {"analyste": analyste_json, "risk": risk_json}
+            return self._wait(f"Risk Manager bloque (risque={risk_score}/10): {risk_json.get('risk_notes', '')[:100]}")
+
+        # Agent 3: DÉCIDEUR — arbitre final
+        decideur_prompt = self._build_decideur_prompt(instrument, ctx, analyste_json, risk_json)
+        self.memory.log_session(f"⚖️ {instrument}: Agent Décideur en réflexion...")
+
+        decideur_raw = self._call_ollama(decideur_prompt, instrument, PROMPT_DECIDEUR)
+        if decideur_raw is None:
+            self.last_raw_response = f"ANALYSTE:\n{analyste_raw}\n\nRISK:\n{risk_raw}"
+            return self._wait("Décideur indisponible — WAIT par sécurité")
+
+        self.last_raw_response = f"ANALYSTE:\n{analyste_raw}\n\nRISK:\n{risk_raw}\n\nDÉCIDEUR:\n{decideur_raw}"
+
+        # Parse final decision
+        decision = self._parse_decision(decideur_raw, ctx)
+        decision["thinking"] = (
+            f"Analyste: {analyste_json.get('setup', '')} → {analyste_dir} force={analyste_force} | "
+            f"Risk: {'OK' if approved else 'BLOCK'} score={risk_score} | "
+            f"Décideur: {decision.get('reasoning', '')[:200]}"
+        )
+        self.last_parsed_response = {
+            "analyste": analyste_json,
+            "risk": risk_json,
+            "decideur": decision,
+        }
 
         self.memory.log_session(
-            f"🤖 {self.provider} → {instrument}: {decision['decision']} "
+            f"⚖️ Décideur → {instrument}: {decision['decision']} "
             f"(conf: {decision.get('confidence', 0):.2f}) | {decision.get('reasoning', '')[:200]}"
         )
 
-        thinking = decision.get("thinking", "")
-        if thinking:
-            self.memory.log_session(f"💭 {instrument}: {thinking[:300]}")
+        # Store collective insight
+        if decision["decision"] != "WAIT":
+            insight = (
+                f"{instrument}: Analyste={analyste_dir}(f{analyste_force}), "
+                f"Risk={'OK' if approved else 'BLOCK'}({risk_score}), "
+                f"Final={decision['decision']}({decision.get('confidence', 0):.0%})"
+            )
+            self.memory.add_ai_insight(insight)
 
         # Step 6: VALIDATE — safety checks
         decision = self._validate(instrument, decision, ctx)
@@ -254,60 +327,79 @@ class TradingAgent:
         }
 
     # ═══════════════════════════════════════════════════════════════════
-    # CHAIN-OF-THOUGHT PROMPT
+    # MULTI-AGENT PROMPT BUILDERS
     # ═══════════════════════════════════════════════════════════════════
 
-    def _build_cot_prompt(self, instrument: str, ctx: Dict) -> str:
+    def _compact_context(self, instrument: str, ctx: Dict) -> Dict:
+        """Pre-compute shared compact data for all agents."""
         signal = ctx["signal"]
         details = signal.get("details", {})
         strategies = ctx["strategies"]
-        prot = ctx["protections"]
-        session = ctx["session"]
-        learning = ctx["learning"]
-        account = ctx["account"]
 
-        # TF confirmation
         confirm_text = ""
         if ctx["signal_confirm"]:
             sc = ctx["signal_confirm"]
             if sc["direction"] == signal["direction"] and sc["score"] >= 2:
-                confirm_text = f"✅ {CONFIRM_TIMEFRAME} confirme: {sc['direction']} score {sc['score']}/5"
+                confirm_text = f"{CONFIRM_TIMEFRAME} confirme: {sc['direction']} {sc['score']}/5"
             else:
-                confirm_text = f"⚠️ {CONFIRM_TIMEFRAME} non aligné: {sc.get('direction', 'WAIT')} score {sc['score']}/5"
+                confirm_text = f"{CONFIRM_TIMEFRAME} non aligné: {sc.get('direction', 'WAIT')} {sc['score']}/5"
 
-        # Memory
-        memory_text = ""
-        if learning["reasons"]:
-            memory_text = f"Mem: {', '.join(learning['reasons'])}. Risque x{learning['risk_multiplier']:.2f}."
-
-        # Protections (compact)
-        prot_text = " | ".join(prot["warnings"][:3]) if prot["warnings"] else "OK"
-
-        # Truncate verbose sections to keep prompt under ~1500 chars
         pa_text = ctx["price_action"]
-        if len(pa_text) > 800:
-            pa_text = pa_text[:800] + "..."
+        if len(pa_text) > 600:
+            pa_text = pa_text[:600] + "..."
 
         strat_text = strategies['llm_context']
-        if len(strat_text) > 600:
-            strat_text = strat_text[:600] + "..."
+        if len(strat_text) > 400:
+            strat_text = strat_text[:400] + "..."
 
-        return f"""{instrument} | Score:{signal['score']}/5 Dir:{signal.get('direction','WAIT')} Regime:{details.get('market_regime','?')}
-RSI:{details.get('rsi',50):.0f} Spread:{ctx['spread']:.1f}p ATR:{signal.get('atr_pips',0)}p
-Supp:{details.get('support',0)} Res:{details.get('resistance',0)} RR_buy:{details.get('rr_buy',0)} RR_sell:{details.get('rr_sell',0)}
-{confirm_text}
+        return {
+            "header": (
+                f"{instrument} Score:{signal['score']}/5 Dir:{signal.get('direction','WAIT')} "
+                f"Regime:{details.get('market_regime','?')} "
+                f"RSI:{details.get('rsi',50):.0f} Spread:{ctx['spread']:.1f}p ATR:{signal.get('atr_pips',0)}p "
+                f"Supp:{details.get('support',0)} Res:{details.get('resistance',0)} "
+                f"RR_buy:{details.get('rr_buy',0)} RR_sell:{details.get('rr_sell',0)}"
+            ),
+            "confirm": confirm_text,
+            "pa": pa_text,
+            "strat": strat_text,
+            "prot": " | ".join(ctx["protections"]["warnings"][:3]) if ctx["protections"]["warnings"] else "OK",
+            "news": ctx["news_ctx"] or "aucun",
+            "account": f"Balance:{ctx['account'].get('balance',0):.0f}$ PnL:{ctx['today_pnl']:.2f}$ Pos:{len(ctx['open_positions'])}",
+            "memory": f"Mem: {', '.join(ctx['learning']['reasons'])}" if ctx["learning"]["reasons"] else "",
+        }
+
+    def _build_analyste_prompt(self, instrument: str, ctx: Dict) -> str:
+        c = self._compact_context(instrument, ctx)
+        return f"""{c['header']}
+{c['confirm']}
 
 PRICE ACTION:
-{pa_text}
+{c['pa']}
 
 MTF/SMC:
-{strat_text}
+{c['strat']}"""
 
-Protections: {prot_text}
-News: {ctx['news_ctx'] or 'aucun'}
-Balance:{account.get('balance',0):.0f}$ PnL:{ctx['today_pnl']:.2f}$ Pos:{len(ctx['open_positions'])} {memory_text}
+    def _build_risk_prompt(self, instrument: str, ctx: Dict, analyste: Dict) -> str:
+        c = self._compact_context(instrument, ctx)
+        setup = analyste.get("setup", "?")
+        direction = analyste.get("direction", "?")
+        force = analyste.get("force", 0)
+        return f"""{c['header']}
+Analyste dit: {direction} force={force}/5 setup="{setup}"
 
-JSON:{{"thinking":"...","decision":"BUY|SELL|WAIT","confidence":0.0-1.0,"stop_loss_pips":N,"take_profit_pips":N,"reasoning":"court"}}"""
+Protections: {c['prot']}
+News: {c['news']}
+{c['account']} {c['memory']}"""
+
+    def _build_decideur_prompt(self, instrument: str, ctx: Dict, analyste: Dict, risk: Dict) -> str:
+        c = self._compact_context(instrument, ctx)
+        return f"""{c['header']}
+
+ANALYSTE: {analyste.get('direction','?')} force={analyste.get('force',0)} — {analyste.get('reasoning','')}
+RISK: {'APPROUVÉ' if risk.get('approved') else 'BLOQUÉ'} risque={risk.get('risk_score','?')}/10 SL={risk.get('sl_pips',0)}p TP={risk.get('tp_pips',0)}p — {risk.get('reasoning','')}
+
+{c['account']}"""
 
     # ═══════════════════════════════════════════════════════════════════
     # LLM COMMUNICATION
@@ -332,7 +424,7 @@ JSON:{{"thinking":"...","decision":"BUY|SELL|WAIT","confidence":0.0-1.0,"stop_lo
     def _approx_tokens(self, text: str) -> int:
         return max(1, len(text) // 4)
 
-    def _call_ollama(self, prompt: str, instrument: str) -> Optional[str]:
+    def _call_ollama(self, prompt: str, instrument: str, system_prompt: str = "") -> Optional[str]:
         if requests is None:
             self.memory.record_error("agent", "package requests absent")
             return None
@@ -349,7 +441,7 @@ JSON:{{"thinking":"...","decision":"BUY|SELL|WAIT","confidence":0.0-1.0,"stop_lo
             self.memory.increment_llm_calls()
             self.memory.record_token_usage(prompt_tokens=tokens, completion_tokens=0)
 
-            full_prompt = SYSTEM_PROMPT + "\n\n" + prompt
+            full_prompt = (system_prompt + "\n\n" + prompt) if system_prompt else prompt
 
             response = requests.post(
                 self.endpoint,
@@ -377,15 +469,6 @@ JSON:{{"thinking":"...","decision":"BUY|SELL|WAIT","confidence":0.0-1.0,"stop_lo
                 self.memory.record_error("agent", "réponse vide du LLM")
                 return None
 
-            # Store insight
-            if raw:
-                try:
-                    parsed = self._extract_json(raw)
-                    if parsed and parsed.get("insight"):
-                        self.memory.add_ai_insight(f"{instrument}: {parsed['insight']}")
-                except Exception:
-                    pass
-
             return raw
 
         except Exception as e:
@@ -409,12 +492,6 @@ JSON:{{"thinking":"...","decision":"BUY|SELL|WAIT","confidence":0.0-1.0,"stop_lo
         thinking = str(parsed.get("thinking", ""))
         reasoning = str(parsed.get("reasoning", parsed.get("insight", "")))
 
-        # Store thinking as episodic memory
-        if thinking:
-            self.memory.add_ai_insight(
-                f"{self.last_analysis_instrument}: [{decision}] {thinking[:200]}"
-            )
-
         return {
             "decision": decision,
             "confidence": min(1.0, max(0.0, float(parsed.get("confidence", 0.0)))),
@@ -422,7 +499,7 @@ JSON:{{"thinking":"...","decision":"BUY|SELL|WAIT","confidence":0.0-1.0,"stop_lo
             "take_profit_pips": int(parsed.get("take_profit_pips", 0) or 0),
             "reasoning": reasoning,
             "thinking": thinking,
-            "risk_note": "agent_cot",
+            "risk_note": "multi_agent",
         }
 
     def _extract_json(self, text: str) -> Optional[Dict]:
