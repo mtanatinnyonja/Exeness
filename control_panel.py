@@ -505,9 +505,9 @@ HTML_PAGE = r"""<!DOCTYPE html>
         <div class="refresh-info" id="active-symbols" style="white-space:normal;line-height:1.6;">—</div>
       </div>
       <div>
-        <div class="kpi-label">Historique</div>
-        <div class="kpi-value accent" id="ml-samples" style="font-size:16px;">0</div>
-        <div class="kpi-sub" id="ml-info">samples BDD</div>
+        <div class="kpi-label">Pipeline Agents</div>
+        <div class="kpi-value accent" id="agent-pipeline-status" style="font-size:14px;">—</div>
+        <div class="kpi-sub" id="agent-pipeline-info">Analyste → Risk → Décideur</div>
       </div>
     </div>
     <div id="features-bar" style="display:flex;gap:6px;flex-wrap:wrap;padding:8px 16px 12px;border-top:1px solid var(--border);"></div>
@@ -520,18 +520,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
     </div>
     <div class="panel-body">
       <div class="form-grid">
-        <div class="field">
-          <label>Source symboles</label>
-          <select id="setting-symbol-mode">
-            <option value="visible">visible · MT5 only</option>
-          </select>
-        </div>
-        <div class="field">
-          <label>Moteur IA</label>
-          <select id="setting-ai-provider">
-            <option value="ollama">ollama · LLM local</option>
-          </select>
-        </div>
+
         <div class="field">
           <label>Filtre symboles (vide = tous)</label>
           <input id="setting-preferred-symbols" placeholder="vide = tous les symboles MT5 visibles" />
@@ -699,10 +688,10 @@ HTML_PAGE = r"""<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- AI EXCHANGE VIEWER -->
+  <!-- MULTI-AGENT EXCHANGE VIEWER -->
   <div class="ai-exchange" style="margin-bottom:16px;">
     <div class="ai-exchange-header" onclick="toggleAiExchange()">
-      <span class="panel-title">🔍 Requête & Réponse IA (dernière analyse)</span>
+      <span class="panel-title">🤖 Pipeline Multi-Agents (dernière analyse)</span>
       <span class="toggle-arrow" id="ai-exchange-arrow">▼</span>
     </div>
     <div class="ai-exchange-body" id="ai-exchange-body">
@@ -710,19 +699,47 @@ HTML_PAGE = r"""<!DOCTYPE html>
         <span>Instrument: <strong id="ai-ex-instrument">—</strong></span>
         <span>Modèle: <strong id="ai-ex-model">—</strong></span>
         <span>Heure: <strong id="ai-ex-time">—</strong></span>
-        <span>Provider: <strong id="ai-ex-provider">—</strong></span>
       </div>
-      <div class="ai-msg ai-msg-prompt">
-        <div class="ai-msg-label prompt-label">🧠 PROMPT ENVOYÉ À L'IA</div>
-        <div id="ai-ex-prompt" style="color:var(--text)">Aucune analyse effectuée.</div>
+
+      <!-- Agent tabs -->
+      <div id="agent-tabs" style="display:flex;gap:6px;margin:10px 0;">
+        <button class="btn" style="font-size:0.75em;padding:4px 10px;" onclick="showAgentTab('analyste')" id="tab-analyste">📊 Analyste</button>
+        <button class="btn secondary" style="font-size:0.75em;padding:4px 10px;" onclick="showAgentTab('risk')" id="tab-risk">🛡️ Risk Manager</button>
+        <button class="btn secondary" style="font-size:0.75em;padding:4px 10px;" onclick="showAgentTab('decideur')" id="tab-decideur">⚖️ Décideur</button>
+        <button class="btn secondary" style="font-size:0.75em;padding:4px 10px;" onclick="showAgentTab('raw')" id="tab-raw">📝 Brut</button>
       </div>
-      <div class="ai-msg ai-msg-response">
-        <div class="ai-msg-label response-label">💬 RÉPONSE BRUTE DE L'IA</div>
-        <div id="ai-ex-raw-response" style="color:var(--text)">—</div>
+
+      <!-- Analyste tab -->
+      <div id="agent-view-analyste" class="agent-tab-view">
+        <div class="ai-msg" style="background:rgba(61,255,160,0.04);border:1px solid rgba(61,255,160,0.12);border-left:3px solid var(--green);">
+          <div class="ai-msg-label" style="color:var(--green);">📊 AGENT ANALYSTE</div>
+          <div id="ai-agent-analyste" style="color:var(--text);white-space:pre-wrap;">En attente...</div>
+        </div>
       </div>
-      <div class="ai-msg" style="background:rgba(255,184,71,0.06);border:1px solid rgba(255,184,71,0.12);border-left:3px solid var(--amber);">
-        <div class="ai-msg-label" style="color:var(--amber);">📋 DÉCISION PARSÉE</div>
-        <div id="ai-ex-parsed" style="color:var(--text)">—</div>
+      <!-- Risk tab -->
+      <div id="agent-view-risk" class="agent-tab-view" style="display:none;">
+        <div class="ai-msg" style="background:rgba(255,184,71,0.04);border:1px solid rgba(255,184,71,0.12);border-left:3px solid var(--amber);">
+          <div class="ai-msg-label" style="color:var(--amber);">🛡️ AGENT RISK MANAGER</div>
+          <div id="ai-agent-risk" style="color:var(--text);white-space:pre-wrap;">En attente...</div>
+        </div>
+      </div>
+      <!-- Decideur tab -->
+      <div id="agent-view-decideur" class="agent-tab-view" style="display:none;">
+        <div class="ai-msg" style="background:rgba(99,102,241,0.06);border:1px solid rgba(99,102,241,0.12);border-left:3px solid #6366f1;">
+          <div class="ai-msg-label" style="color:#6366f1;">⚖️ AGENT DÉCIDEUR</div>
+          <div id="ai-agent-decideur" style="color:var(--text);white-space:pre-wrap;">En attente...</div>
+        </div>
+      </div>
+      <!-- Raw tab -->
+      <div id="agent-view-raw" class="agent-tab-view" style="display:none;">
+        <div class="ai-msg ai-msg-prompt">
+          <div class="ai-msg-label prompt-label">🧠 PROMPT ENVOYÉ</div>
+          <div id="ai-ex-prompt" style="color:var(--text)">Aucune analyse effectuée.</div>
+        </div>
+        <div class="ai-msg ai-msg-response">
+          <div class="ai-msg-label response-label">💬 RÉPONSES BRUTES</div>
+          <div id="ai-ex-raw-response" style="color:var(--text)">—</div>
+        </div>
       </div>
     </div>
   </div>
@@ -939,8 +956,6 @@ function colorVal(el, val) {
 
 function populateSettings(data) {
   const settings = data.settings || {};
-  document.getElementById('setting-symbol-mode').value = 'visible';
-  document.getElementById('setting-ai-provider').value = 'ollama';
   document.getElementById('setting-preferred-symbols').value = (settings.preferred_symbols || []).join(',');
   document.getElementById('setting-max-symbols').value = settings.max_symbols_per_cycle || 3;
   document.getElementById('setting-check-interval').value = settings.check_interval_minutes || 15;
@@ -961,9 +976,15 @@ function populateSettings(data) {
   document.getElementById('setting-telegram-enabled').value = String(settings.telegram_enabled ?? true);
   document.getElementById('tg-status').textContent = (settings.telegram_enabled ?? true) ? 'actif' : 'désactivé';
 
-  const ml = data.ml_stats || {};
-  document.getElementById('ml-samples').textContent = ml.samples || 0;
-  document.getElementById('ml-info').textContent = 'signaux enregistrés';
+  // Update agent pipeline status from last exchange
+  const parsed = data.last_ai_exchange?.parsed_response;
+  if (parsed && typeof parsed === 'object') {
+    const agents = [];
+    if (parsed.analyste) agents.push('Analyste ✅');
+    if (parsed.risk) agents.push('Risk ' + (parsed.risk.approved ? '✅' : '❌'));
+    if (parsed.decideur) agents.push('Décideur ✅');
+    document.getElementById('agent-pipeline-status').textContent = agents.join(' → ') || '—';
+  }
 }
 
 function scheduleAutoSave() {
@@ -972,13 +993,8 @@ function scheduleAutoSave() {
   autoSaveTimer = setTimeout(() => saveSettings(true), 350);
 }
 
-function keepLockedModes() {
-  document.getElementById('setting-symbol-mode').value = 'visible';
-  document.getElementById('setting-ai-provider').value = 'ollama';
-}
 
 async function saveSettings(silent = false) {
-  keepLockedModes();
   const payload = {
     symbol_source_mode: 'visible',
     ai_provider_requested: 'ollama',
@@ -998,7 +1014,6 @@ async function saveSettings(silent = false) {
     llm_analysis_notes: document.getElementById('setting-analysis-notes').value,
     allow_trade_execution: document.getElementById('setting-allow-trade').value === 'true',
     telegram_enabled: document.getElementById('setting-telegram-enabled').value === 'true',
-    symbol_selection_mode: 'smart'
   };
 
   const res = await fetch('/api/settings', {
@@ -1486,28 +1501,75 @@ function renderProtections(prot) {
   }
 }
 
+function showAgentTab(tab) {
+  ['analyste', 'risk', 'decideur', 'raw'].forEach(t => {
+    document.getElementById('agent-view-' + t).style.display = t === tab ? 'block' : 'none';
+    const btn = document.getElementById('tab-' + t);
+    if (btn) btn.className = t === tab ? 'btn' : 'btn secondary';
+  });
+}
+
+function formatAgentJson(obj) {
+  if (!obj || typeof obj !== 'object') return String(obj || '—');
+  return Object.entries(obj).map(([k, v]) => {
+    if (typeof v === 'object') v = JSON.stringify(v);
+    return k + ': ' + v;
+  }).join('\n');
+}
+
 function renderAiExchange(exchange) {
   if (!exchange || !exchange.prompt) return;
   document.getElementById('ai-ex-instrument').textContent = exchange.instrument || '—';
   document.getElementById('ai-ex-model').textContent = exchange.model || '—';
-  document.getElementById('ai-ex-provider').textContent = exchange.provider || '—';
   const ts = exchange.timestamp || '';
   document.getElementById('ai-ex-time').textContent = ts ? ts.replace('T', ' ').slice(0, 19) : '—';
 
-  // Format prompt with syntax highlighting
-  const promptText = exchange.prompt || 'Aucun prompt.';
-  document.getElementById('ai-ex-prompt').textContent = promptText;
+  // Raw data
+  document.getElementById('ai-ex-prompt').textContent = exchange.prompt || 'Aucun prompt.';
+  document.getElementById('ai-ex-raw-response').textContent = exchange.raw_response || '—';
 
-  // Raw response
-  const rawResp = exchange.raw_response || '—';
-  document.getElementById('ai-ex-raw-response').textContent = rawResp;
-
-  // Parsed response as formatted JSON
+  // Multi-agent parsed views
   const parsed = exchange.parsed_response;
   if (parsed && typeof parsed === 'object') {
-    document.getElementById('ai-ex-parsed').textContent = JSON.stringify(parsed, null, 2);
-  } else {
-    document.getElementById('ai-ex-parsed').textContent = String(parsed || '—');
+    // Analyste
+    const a = parsed.analyste;
+    if (a) {
+      const dir = String(a.direction || 'NEUTRAL').toUpperCase();
+      const force = a.force || 0;
+      const dirColor = dir === 'BUY' || dir === 'LONG' ? 'var(--green)' : dir === 'SELL' || dir === 'SHORT' ? 'var(--red)' : 'var(--amber)';
+      document.getElementById('ai-agent-analyste').innerHTML =
+        '<strong style="color:' + dirColor + '">' + dir + '</strong> force=' + force + '/5' +
+        (a.setup ? '<br>Setup: ' + a.setup : '') +
+        (a.reasoning ? '<br>Raison: ' + a.reasoning : '');
+    } else {
+      document.getElementById('ai-agent-analyste').textContent = 'Pas encore exécuté';
+    }
+    // Risk Manager
+    const r = parsed.risk;
+    if (r) {
+      const approved = r.approved;
+      const riskScore = r.risk_score || '?';
+      document.getElementById('ai-agent-risk').innerHTML =
+        '<strong style="color:' + (approved ? 'var(--green)' : 'var(--red)') + '">' +
+        (approved ? '✅ APPROUVÉ' : '❌ BLOQUÉ') + '</strong> risque=' + riskScore + '/10' +
+        (r.reasoning ? '<br>Raison: ' + r.reasoning : '') +
+        (r.risk_notes ? '<br>Notes: ' + r.risk_notes : '');
+    } else {
+      document.getElementById('ai-agent-risk').textContent = 'Pipeline arrêté avant Risk Manager';
+    }
+    // Décideur
+    const d = parsed.decideur;
+    if (d) {
+      const dec = String(d.decision || 'WAIT').toUpperCase();
+      const conf = Math.round((parseFloat(d.confidence || 0)) * 100);
+      const decColor = dec === 'BUY' ? 'var(--green)' : dec === 'SELL' ? 'var(--red)' : 'var(--amber)';
+      document.getElementById('ai-agent-decideur').innerHTML =
+        '<strong style="color:' + decColor + '">' + dec + '</strong> confiance=' + conf + '%' +
+        (d.reasoning ? '<br>Raison: ' + d.reasoning : '') +
+        (d.sl ? '<br>SL: ' + d.sl : '') + (d.tp ? ' | TP: ' + d.tp : '');
+    } else {
+      document.getElementById('ai-agent-decideur').textContent = 'Pipeline arrêté avant Décideur';
+    }
   }
 }
 
@@ -1784,8 +1846,6 @@ function tick() {
 
 function initAutoSave() {
   [
-    'setting-symbol-mode',
-    'setting-ai-provider',
     'setting-preferred-symbols',
     'setting-max-symbols',
     'setting-check-interval',
@@ -1806,14 +1866,10 @@ function initAutoSave() {
     if (el) {
       el.addEventListener('change', scheduleAutoSave);
       el.addEventListener('input', scheduleAutoSave);
-      if (id === 'setting-preferred-symbols' || id === 'setting-symbol-mode' || id === 'setting-ai-provider') {
-        el.addEventListener('input', keepLockedModes);
-      }
     }
   });
 }
 
-keepLockedModes();
 fetchStatus().finally(() => {
   if (!initialAiWarmupDone) {
     setTimeout(() => testAI(), 700);
