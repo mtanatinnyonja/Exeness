@@ -51,6 +51,13 @@ Trade UNIQUEMENT si: l'Analyste a un setup clair ET le Risk Manager approuve ET 
 En cas de doute ou désaccord → WAIT.
 JSON uniquement: {"decision":"BUY|SELL|WAIT","confidence":0.0-1.0,"stop_loss_pips":N,"take_profit_pips":N,"reasoning":"court"}"""
 
+PROMPT_GARDIEN = """Tu es le GARDIEN de positions. Tu surveilles un trade ouvert et décides:
+- HOLD: garder la position, tout va bien
+- CLOSE: couper maintenant (retournement, danger, objectif atteint)
+- TIGHTEN: resserrer le SL pour sécuriser les gains
+Analyse le P&L, la structure actuelle, et les signaux de retournement.
+JSON uniquement: {"action":"HOLD|CLOSE|TIGHTEN","urgency":1-10,"new_sl_pips":N,"reasoning":"court"}"""
+
 
 class TradingAgent:
     """
@@ -241,6 +248,101 @@ class TradingAgent:
             "provider": self.provider,
             "model": self.model,
         }
+
+    def monitor_position(self, position: Dict, account: Dict) -> Dict:
+        """
+        Agent Gardien: surveille une position ouverte et décide HOLD/CLOSE/TIGHTEN.
+        Appelé à chaque cycle pour chaque position existante.
+        """
+        self._load_settings()
+        instrument = position.get("instrument", "")
+        direction = str(position.get("direction", "")).upper()
+        entry = float(position.get("entry_price") or position.get("open_price") or 0)
+        current = float(position.get("current_price") or 0)
+        upnl = float(position.get("unrealized_pnl", 0))
+        sl = float(position.get("stop_loss") or 0)
+        tp = float(position.get("take_profit") or 0)
+
+        if not instrument or not direction or not entry:
+            return {"action": "HOLD", "reasoning": "données position insuffisantes"}
+
+        # Gather fresh market data
+        try:
+            candles = self.broker.get_candles(instrument, PRIMARY_TIMEFRAME, 60)
+            if len(candles) < 20:
+                return {"action": "HOLD", "reasoning": "données marché insuffisantes"}
+        except Exception:
+            return {"action": "HOLD", "reasoning": "erreur données marché"}
+
+        signal = calculate_signal_score(candles, instrument)
+        details = signal.get("details", {})
+        spread = self.broker.get_spread_pips(instrument)
+
+        # Quick check: if signal strongly opposes position → ask LLM
+        signal_dir = signal.get("direction", "WAIT")
+        signal_score = signal.get("score", 0)
+
+        # Build Gardien prompt
+        prompt = self._build_gardien_prompt(
+            instrument, direction, entry, current, upnl, sl, tp,
+            spread, signal, details, account
+        )
+
+        self.memory.log_session(f"👁️ {instrument}: Agent Gardien surveille {direction} P&L=${upnl:.2f}...")
+
+        raw = self._call_ollama(prompt, instrument, PROMPT_GARDIEN)
+        if raw is None:
+            # LLM indisponible → fallback mécanique sûr
+            if upnl < -3.0:
+                self.memory.log_session(f"⚠️ {instrument}: Gardien offline, perte ${upnl:.2f} → CLOSE par sécurité")
+                return {"action": "CLOSE", "reasoning": f"LLM offline + perte ${upnl:.2f}", "urgency": 8}
+            return {"action": "HOLD", "reasoning": "Gardien offline, position stable"}
+
+        parsed = self._extract_json(raw) or {}
+        action = str(parsed.get("action", "HOLD")).upper()
+        if action not in ("HOLD", "CLOSE", "TIGHTEN"):
+            action = "HOLD"
+
+        urgency = min(10, max(1, int(parsed.get("urgency", 1) or 1)))
+        reasoning = str(parsed.get("reasoning", ""))
+        new_sl_pips = int(parsed.get("new_sl_pips", 0) or 0)
+
+        emoji = {"HOLD": "✅", "CLOSE": "🔴", "TIGHTEN": "🔄"}.get(action, "❓")
+        self.memory.log_session(
+            f"{emoji} Gardien → {instrument} {direction}: {action} (urgence={urgency}/10) | {reasoning[:150]}"
+        )
+
+        return {
+            "action": action,
+            "urgency": urgency,
+            "new_sl_pips": new_sl_pips,
+            "reasoning": reasoning,
+        }
+
+    def _build_gardien_prompt(self, instrument, direction, entry, current, upnl,
+                               sl, tp, spread, signal, details, account):
+        signal_dir = signal.get("direction", "WAIT")
+        regime = details.get("market_regime", "?")
+        rsi = details.get("rsi", 50)
+        score = signal.get("score", 0)
+        atr = signal.get("atr_pips", 0)
+
+        # Reversal alert
+        reversal = ""
+        if direction == "BUY" and signal_dir == "SELL" and score >= 3:
+            reversal = "⚠️ SIGNAL CONTRAIRE: marché dit SELL force {}/5".format(score)
+        elif direction == "SELL" and signal_dir == "BUY" and score >= 3:
+            reversal = "⚠️ SIGNAL CONTRAIRE: marché dit BUY force {}/5".format(score)
+
+        return f"""POSITION OUVERTE: {instrument} {direction}
+Entry:{entry} Current:{current} P&L:${upnl:.2f}
+SL:{sl} TP:{tp} Spread:{spread:.1f}p
+
+MARCHÉ ACTUEL:
+Signal:{signal_dir} Score:{score}/5 Regime:{regime} RSI:{rsi:.0f} ATR:{atr}p
+{reversal}
+
+Balance:{account.get('balance',0):.0f}$ Positions:{account.get('open_trades',0)}"""
 
     # ═══════════════════════════════════════════════════════════════════
     # CONTEXT GATHERING

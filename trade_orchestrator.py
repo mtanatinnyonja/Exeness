@@ -568,6 +568,8 @@ class TradeOrchestrator:
             return None
 
     def _check_existing_positions(self, positions: List[Dict]):
+        account = self.broker.get_account_summary()
+
         for pos in positions:
             upnl = float(pos.get("unrealized_pnl", 0))
             emoji = "📈" if upnl >= 0 else "📉"
@@ -577,7 +579,57 @@ class TradeOrchestrator:
                 f"{emoji} Position {instrument} {direction}: P&L non réalisé = ${upnl:.2f}"
             )
 
-            # Trailing stop / break-even management
+            # ═══ Agent Gardien: surveillance intelligente ═══
+            try:
+                gardien = self.agent.monitor_position(pos, account)
+                action = gardien.get("action", "HOLD")
+
+                if action == "CLOSE":
+                    try:
+                        pnl = self.broker.close_position(instrument)
+                        self.memory.log_session(
+                            f"🔴 Gardien ferme {instrument} {direction} | "
+                            f"raison: {gardien.get('reasoning', '')[:100]} | pnl=${float(pnl or 0):.2f}"
+                        )
+                        self.memory.record_trade(
+                            instrument, direction, float(pnl or 0),
+                            pattern="gardien_close", notes=gardien.get("reasoning", "")[:200]
+                        )
+                        continue  # Position fermée, skip trailing
+                    except Exception as close_err:
+                        self.memory.record_error("gardien", f"Fermeture échouée {instrument}: {close_err}")
+
+                elif action == "TIGHTEN":
+                    new_sl_pips = gardien.get("new_sl_pips", 0)
+                    if new_sl_pips > 0:
+                        try:
+                            entry = float(pos.get("entry_price") or pos.get("open_price") or 0)
+                            pip_size = self.broker._pip_size(instrument) if hasattr(self.broker, '_pip_size') else 0.0001
+                            ticket = pos.get("ticket")
+                            old_sl = float(pos.get("stop_loss") or 0)
+
+                            if direction == "BUY":
+                                new_sl = entry + (new_sl_pips * pip_size) if new_sl_pips > 0 else entry - abs(new_sl_pips) * pip_size
+                            else:
+                                new_sl = entry - (new_sl_pips * pip_size) if new_sl_pips > 0 else entry + abs(new_sl_pips) * pip_size
+
+                            # On ne resserre que si c'est mieux
+                            better = (direction == "BUY" and new_sl > old_sl) or \
+                                     (direction == "SELL" and (old_sl == 0 or new_sl < old_sl))
+
+                            if better and ticket and hasattr(self.broker, 'modify_position'):
+                                self.broker.modify_position(ticket, new_sl=new_sl)
+                                self.memory.log_session(
+                                    f"🔄 Gardien resserre {instrument}: SL {old_sl:.5f} → {new_sl:.5f} | "
+                                    f"{gardien.get('reasoning', '')[:100]}"
+                                )
+                        except Exception as tighten_err:
+                            self.memory.record_error("gardien", f"Tighten échoué {instrument}: {tighten_err}")
+
+            except Exception as gardien_err:
+                self.memory.record_error("gardien", f"{instrument}: {gardien_err}")
+
+            # ═══ Trailing stop mécanique (fallback si Gardien dit HOLD) ═══
             try:
                 entry = float(pos.get("entry_price") or pos.get("open_price") or 0)
                 current = float(pos.get("current_price") or 0)
@@ -595,7 +647,6 @@ class TradeOrchestrator:
                     trail = calculate_trail_levels(direction, entry, current, atr, sl_pips, pip_size)
 
                     if trail["action"] != "hold" and trail.get("new_sl"):
-                        # Vérifie que le nouveau SL est meilleur que l'ancien
                         old_sl = float(pos.get("stop_loss") or 0)
                         new_sl = trail["new_sl"]
                         better = (direction == "BUY" and new_sl > old_sl) or \
@@ -609,10 +660,6 @@ class TradeOrchestrator:
                                 )
                             except Exception as mod_err:
                                 self.memory.record_error("trailing", str(mod_err))
-                        elif better:
-                            self.memory.log_session(
-                                f"📋 {instrument}: trail recommandé — {trail['reason']}"
-                            )
             except Exception as trail_err:
                 self.memory.record_error("trailing", f"{instrument}: {trail_err}")
 
