@@ -312,6 +312,10 @@ class TradeOrchestrator:
                 pass
             return
         # Pas d'objectif journalier fixe: on trade tant que le money management est respecté
+        daily_target = float(runtime_settings.get('daily_target', DAILY_TARGET) or 0)
+        if daily_target > 0 and today_pnl >= daily_target:
+            self.memory.log_session(f"🎯 Objectif jour atteint: +${today_pnl:.2f} / ${daily_target:.2f} — pause")
+            return
         if today_pnl > 0:
             self.memory.log_session(f"📈 P&L jour: +${today_pnl:.2f} — on continue")
 
