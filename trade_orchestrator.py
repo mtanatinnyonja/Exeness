@@ -184,21 +184,29 @@ class TradeOrchestrator:
             self._last_scan = {"mode": "fallback", "candidates": [], "rejected": [], "selected": list(INSTRUMENTS)[:max_symbols]}
             return list(INSTRUMENTS)[:max_symbols]
 
-        # Mode "preferred" = ancien mode, filtre strict statique
-        if selection_mode == "preferred" and preferred:
+        # Filtre symboles: si renseigné → UNIQUEMENT ces paires (dans les deux modes)
+        if preferred:
             filtered = [s for s in visible if any(s.upper() == p.upper() for p in preferred)]
-            result = filtered[:max_symbols] if filtered else visible[:max_symbols]
+            if not filtered:
+                self.memory.log_session(f"⚠️ Aucun symbole filtré trouvé dans MT5, fallback sur visibles")
+                filtered = visible
+            scan_pool = filtered
+        else:
+            scan_pool = visible
+
+        # Mode smart = scan par spread, mode preferred = ordre tel quel
+        if selection_mode == "preferred":
+            result = scan_pool[:max_symbols]
             self._last_scan = {"mode": "preferred", "candidates": [], "rejected": [], "selected": result}
             return result
 
-        # Mode "smart" = scan silencieux de toutes les paires, filtre par spread
-        return self._smart_scan_instruments(visible, preferred, max_symbols)
+        return self._smart_scan_instruments(scan_pool, preferred, max_symbols)
 
     def _smart_scan_instruments(self, visible: List[str], preferred: List[str], max_symbols: int) -> List[str]:
         """
-        Scan silencieux: évalue chaque paire visible sur le spread.
+        Scan silencieux: évalue chaque paire sur le spread.
         Trie par favorabilité, prend les meilleures.
-        Les preferred_symbols sont prioritaires mais pas exclusifs.
+        Le pool visible est déjà filtré par preferred_symbols si renseigné.
         """
         candidates = []
         rejected = []
