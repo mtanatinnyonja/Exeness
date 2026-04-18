@@ -43,7 +43,7 @@ DASHBOARD_PORT = int(os.getenv("DASHBOARD_PORT", "8080"))
 AI_PROVIDER = os.getenv("AI_PROVIDER", "ollama").strip().lower()
 LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "qwen2.5:3b").strip()
 LOCAL_LLM_ENDPOINT = os.getenv("LOCAL_LLM_ENDPOINT", "http://127.0.0.1:11434/api/generate").strip()
-LOCAL_LLM_TIMEOUT = int(os.getenv("LOCAL_LLM_TIMEOUT", "60"))
+LOCAL_LLM_TIMEOUT = int(os.getenv("LOCAL_LLM_TIMEOUT", "300"))
 MAX_LLM_CALLS_PER_DAY = int(os.getenv("MAX_LLM_CALLS_PER_DAY", "0"))  # 0 = illimité
 DAILY_TOKEN_BUDGET = int(os.getenv("DAILY_TOKEN_BUDGET", "0"))  # 0 = illimité
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.02"))

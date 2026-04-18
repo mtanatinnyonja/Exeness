@@ -36,25 +36,9 @@ from economic_calendar import EconomicCalendar
 from runtime_db import RuntimeStore
 
 
-SYSTEM_PROMPT = """Tu es un agent de trading professionnel MT5.
-Tu raisonnes étape par étape comme un trader institutionnel avant de décider.
-
-PROCESSUS:
-1. Lis la structure price action (Higher Highs/Lows? Range? Breakout?)
-2. Identifie le régime (tendance, range, volatile)
-3. Vérifie l'alignement multi-timeframe (H4/D1 vs M15)
-4. Cherche les confluences (zones SMC, sessions, niveaux clés)
-5. Évalue les risques (protections, news, corrélation)
-6. Décide: TRADE uniquement si la structure est CLAIRE, sinon WAIT
-
-RÈGLES ABSOLUES:
-- Jamais de trade sans structure price action claire
-- SL derrière un niveau structurel (support/résistance, mèche de rejet)
-- Minimum RR 1.5:1 sinon WAIT
-- En doute → WAIT
-- Capital preservation > profits
-
-Réponds UNIQUEMENT en JSON valide, sans commentaires."""
+SYSTEM_PROMPT = """Agent trading MT5. Raisonne puis décide.
+Règles: structure claire sinon WAIT, SL derrière niveau structurel, RR>=1.5, doute=WAIT.
+JSON uniquement: {"thinking":"...","decision":"BUY|SELL|WAIT","confidence":0.0-1.0,"stop_loss_pips":N,"take_profit_pips":N,"reasoning":"court"}"""
 
 
 class TradingAgent:
@@ -294,53 +278,36 @@ class TradingAgent:
         # Memory
         memory_text = ""
         if learning["reasons"]:
-            memory_text = f"ALERTES: {', '.join(learning['reasons'])}. Risque ×{learning['risk_multiplier']:.2f}."
+            memory_text = f"Mem: {', '.join(learning['reasons'])}. Risque x{learning['risk_multiplier']:.2f}."
 
-        memory_ctx = ""
-        try:
-            raw_mem = self.memory.get_context_for_llm()
-            if raw_mem:
-                memory_ctx = " ".join(str(raw_mem).split())[:600]
-        except Exception:
-            pass
+        # Protections (compact)
+        prot_text = " | ".join(prot["warnings"][:3]) if prot["warnings"] else "OK"
 
-        # Protections
-        prot_text = "\n".join(prot["warnings"][:5]) if prot["warnings"] else "Aucune alerte"
+        # Truncate verbose sections to keep prompt under ~1500 chars
+        pa_text = ctx["price_action"]
+        if len(pa_text) > 800:
+            pa_text = pa_text[:800] + "..."
 
-        return f"""=== ANALYSE {instrument} ===
+        strat_text = strategies['llm_context']
+        if len(strat_text) > 600:
+            strat_text = strat_text[:600] + "..."
 
-PRICE ACTION (structure du marché):
-{ctx["price_action"]}
-
-INDICATEURS:
-Score: {signal['score']}/5 | Direction brute: {signal.get('direction', 'WAIT')}
-Régime: {details.get('market_regime', '?')} | RSI: {details.get('rsi', 50):.1f} | Pattern: {details.get('candle_pattern', 'aucun')}
-Trend strength: {details.get('trend_strength', 0):.3f}
-Support: {details.get('support', 0)} ({details.get('distance_to_support_pips', 0)} pips)
-Résistance: {details.get('resistance', 0)} ({details.get('distance_to_resistance_pips', 0)} pips)
-RR achat: {details.get('rr_buy', 0)} | RR vente: {details.get('rr_sell', 0)}
-ATR: {signal.get('atr_pips', 0)} pips | Spread: {ctx['spread']:.1f} pips
+        return f"""{instrument} | Score:{signal['score']}/5 Dir:{signal.get('direction','WAIT')} Regime:{details.get('market_regime','?')}
+RSI:{details.get('rsi',50):.0f} Spread:{ctx['spread']:.1f}p ATR:{signal.get('atr_pips',0)}p
+Supp:{details.get('support',0)} Res:{details.get('resistance',0)} RR_buy:{details.get('rr_buy',0)} RR_sell:{details.get('rr_sell',0)}
 {confirm_text}
 
-MULTI-TIMEFRAME & SMART MONEY:
-{strategies['llm_context']}
+PRICE ACTION:
+{pa_text}
 
-PROTECTIONS:
-{prot_text}
+MTF/SMC:
+{strat_text}
 
-CALENDRIER:
-{ctx['news_ctx'] or 'Pas d événement majeur'}
+Protections: {prot_text}
+News: {ctx['news_ctx'] or 'aucun'}
+Balance:{account.get('balance',0):.0f}$ PnL:{ctx['today_pnl']:.2f}$ Pos:{len(ctx['open_positions'])} {memory_text}
 
-COMPTE:
-Balance: {account.get('balance', 0):.0f}$ | PnL jour: {ctx['today_pnl']:.2f}$ | Positions: {len(ctx['open_positions'])}
-{memory_text}
-
-MÉMOIRE AGENT:
-{memory_ctx or 'Première analyse.'}
-
-Raisonne étape par étape dans "thinking", puis décide.
-JSON strict uniquement:
-{{"thinking": "analyse détaillée...", "decision": "BUY|SELL|WAIT", "confidence": 0.0-1.0, "stop_loss_pips": N, "take_profit_pips": N, "reasoning": "résumé court"}}"""
+JSON:{{"thinking":"...","decision":"BUY|SELL|WAIT","confidence":0.0-1.0,"stop_loss_pips":N,"take_profit_pips":N,"reasoning":"court"}}"""
 
     # ═══════════════════════════════════════════════════════════════════
     # LLM COMMUNICATION
@@ -393,7 +360,7 @@ JSON strict uniquement:
                     "stream": False,
                     "options": {
                         "temperature": self.temperature,
-                        "num_predict": 800,
+                        "num_predict": 200,
                     },
                     "keep_alive": "10m",
                 },
