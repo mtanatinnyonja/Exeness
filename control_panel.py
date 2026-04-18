@@ -1574,7 +1574,8 @@ async function fetchStatus() {
     }
 
     // Config active
-    const prefFilter = (data.settings?.preferred_symbols || '').trim();
+    const rawPref = data.settings?.preferred_symbols || '';
+    const prefFilter = Array.isArray(rawPref) ? rawPref.join(', ') : String(rawPref).trim();
     const filterLabel = prefFilter ? '🎯 ' + prefFilter : '🔍 toutes les paires';
     document.getElementById('symbol-mode').textContent = filterLabel;
     document.getElementById('ai-provider').textContent = data.ai_provider || '—';
