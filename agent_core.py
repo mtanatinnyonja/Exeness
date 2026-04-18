@@ -6,13 +6,16 @@ Agent IA de trading autonome — Architecture Multi-Agents.
   2. Risk Manager — évalue les risques, valide ou bloque
   3. Décideur    — arbitre final, ne trade que sur consensus
 
-Si le LLM est indisponible, l'agent attend — pas de fallback automatique.
+Si le LLM est indisponible après retry, fallback technique activable via
+LLM_FALLBACK_TECHNICAL dans settings.py.
 """
 
 import json
 import re
+import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
+from urllib.parse import urlparse
 
 try:
     import requests
@@ -24,7 +27,7 @@ from settings import (
     LLM_TEMPERATURE, LLM_MIN_CONFIDENCE,
     MAX_LLM_CALLS_PER_DAY, DAILY_TOKEN_BUDGET,
     ONLY_ALLOW_LOCAL_LLM, PRIMARY_TIMEFRAME, CONFIRM_TIMEFRAME,
-    DAILY_LOSS_LIMIT,
+    DAILY_LOSS_LIMIT, LLM_FALLBACK_TECHNICAL,
 )
 from signal_engine import (
     calculate_signal_score, build_price_action_description, _MIN_CANDLES,
@@ -77,6 +80,7 @@ class TradingAgent:
         self.last_parsed_response = None
         self.last_analysis_instrument = ""
         self.last_analysis_timestamp = ""
+        self._llm_healthy = True   # état LLM visible par le dashboard
 
         self._load_settings()
 
@@ -150,6 +154,9 @@ class TradingAgent:
 
         analyste_raw = self._call_ollama(analyste_prompt, instrument, PROMPT_ANALYSTE)
         if analyste_raw is None:
+            # LLM indisponible → fallback technique si activé
+            if LLM_FALLBACK_TECHNICAL:
+                return self._technical_fallback_decision(instrument, ctx)
             self.memory.log_session(f"⏸️ {instrument}: LLM indisponible — WAIT")
             return self._wait("LLM indisponible — pas de trade sans analyse")
 
@@ -246,6 +253,7 @@ class TradingAgent:
             "parsed_response": self.last_parsed_response,
             "provider": self.provider,
             "model": self.model,
+            "llm_healthy": self._llm_healthy,
         }
 
     def monitor_position(self, position: Dict, account: Dict) -> Dict:
@@ -526,11 +534,14 @@ RISK: {'APPROUVÉ' if risk.get('approved') else 'BLOQUÉ'} risque={risk.get('ris
         return max(1, len(text) // 4)
 
     def _call_ollama(self, prompt: str, instrument: str, system_prompt: str = "") -> Optional[str]:
+        """Appel LLM local avec 1 retry automatique après 5s si échec."""
         if requests is None:
             self.memory.record_error("agent", "package requests absent")
+            self._llm_healthy = False
             return None
         if ONLY_ALLOW_LOCAL_LLM and not self._is_local_endpoint(self.endpoint):
             self.memory.record_error("agent", f"endpoint non-local refusé: {self.endpoint}")
+            self._llm_healthy = False
             return None
 
         tokens = self._approx_tokens(prompt)
@@ -538,43 +549,99 @@ RISK: {'APPROUVÉ' if risk.get('approved') else 'BLOQUÉ'} risque={risk.get('ris
             self.memory.record_error("agent", "budget LLM épuisé")
             return None
 
-        try:
-            self.memory.increment_llm_calls()
-            self.memory.record_token_usage(prompt_tokens=tokens, completion_tokens=0)
+        full_prompt = (system_prompt + "\n\n" + prompt) if system_prompt else prompt
+        payload = {
+            "model": self.model,
+            "prompt": full_prompt,
+            "stream": False,
+            "options": {
+                "temperature": self.temperature,
+                "num_predict": 200,
+            },
+            "keep_alive": "10m",
+        }
 
-            full_prompt = (system_prompt + "\n\n" + prompt) if system_prompt else prompt
+        last_error = None
+        for attempt in range(2):          # 1 essai + 1 retry
+            if attempt > 0:
+                self.memory.log_session(f"⟳ {instrument}: retry LLM dans 5s (tentative {attempt+1}/2)...")
+                time.sleep(5)
+            try:
+                self.memory.increment_llm_calls()
+                self.memory.record_token_usage(prompt_tokens=tokens, completion_tokens=0)
 
-            response = requests.post(
-                self.endpoint,
-                headers={"Content-Type": "application/json"},
-                json={
-                    "model": self.model,
-                    "prompt": full_prompt,
-                    "stream": False,
-                    "options": {
-                        "temperature": self.temperature,
-                        "num_predict": 200,
-                    },
-                    "keep_alive": "10m",
-                },
-                timeout=self.timeout,
+                response = requests.post(
+                    self.endpoint,
+                    headers={"Content-Type": "application/json"},
+                    json=payload,
+                    timeout=self.timeout,
+                )
+                response.raise_for_status()
+                data = response.json()
+                raw = (data.get("response") or "").strip()
+
+                completion_tokens = self._approx_tokens(raw)
+                self.memory.record_token_usage(prompt_tokens=0, completion_tokens=completion_tokens)
+
+                if not raw:
+                    self.memory.record_error("agent", "réponse vide du LLM")
+                    last_error = "réponse vide"
+                    continue
+
+                self._llm_healthy = True
+                return raw
+
+            except Exception as e:
+                last_error = str(e)
+                self.memory.record_error("agent", f"tentative {attempt+1}/2: {e}")
+
+        # Les 2 tentatives ont échoué
+        self._llm_healthy = False
+        self.memory.log_session(f"🔴 LLM indisponible après 2 tentatives: {last_error}")
+        return None
+
+    def _technical_fallback_decision(self, instrument: str, ctx: Dict) -> Dict:
+        """
+        Fallback purement technique quand le LLM est indisponible.
+        Utilise le signal_score + direction calculés par signal_engine.
+        Politique conservatrice : seuil élevé (score >= 4), risque réduit.
+        """
+        self.memory.log_session(
+            f"⚙️ {instrument}: LLM offline — fallback technique activé"
+        )
+
+        signal = ctx.get("signal", {})
+        score = int(signal.get("score", 0))
+        direction = str(signal.get("direction", "WAIT")).upper()
+        protections = ctx.get("protections", {})
+        blocked = protections.get("blocked", False)
+
+        # Bloque si une protection est active
+        if blocked:
+            return self._wait("Fallback technique: protection active, WAIT")
+
+        # Exige un score >= 4 (vs 2 en mode normal) — conservateur
+        if direction in ("BUY", "SELL") and score >= 4:
+            atr_pips = int(signal.get("atr_pips", 20))
+            sl_pips = max(10, min(atr_pips, 50))   # bornes de sécurité
+            tp_pips = int(sl_pips * 1.5)            # RR minimum 1.5
+
+            self.memory.log_session(
+                f"⚙️ {instrument}: Fallback → {direction} score={score}/5 "
+                f"SL={sl_pips}p TP={tp_pips}p (LLM absent)"
             )
-            response.raise_for_status()
-            data = response.json()
-            raw = (data.get("response") or "").strip()
+            return {
+                "decision": direction,
+                "confidence": 0.40,             # valeur sentinelle < LLM_MIN_CONFIDENCE (0.60)
+                "stop_loss_pips": sl_pips,
+                "take_profit_pips": tp_pips,
+                "reasoning": f"Fallback technique (LLM offline): score={score}, dir={direction}",
+                "thinking": "LLM indisponible — décision technique pure",
+                "risk_note": "technical_fallback",
+                "risk_multiplier": 0.5,         # risque réduit de moitié en fallback
+            }
 
-            completion_tokens = self._approx_tokens(raw)
-            self.memory.record_token_usage(prompt_tokens=0, completion_tokens=completion_tokens)
-
-            if not raw:
-                self.memory.record_error("agent", "réponse vide du LLM")
-                return None
-
-            return raw
-
-        except Exception as e:
-            self.memory.record_error("agent", str(e))
-            return None
+        return self._wait(f"Fallback technique: score={score} direction={direction} insuffisant")
 
     # ═══════════════════════════════════════════════════════════════════
     # DECISION PARSING
@@ -660,13 +727,16 @@ RISK: {'APPROUVÉ' if risk.get('approved') else 'BLOQUÉ'} risque={risk.get('ris
         if decision["decision"] == "WAIT":
             return decision
 
-        # Confidence check
-        if decision["confidence"] < self.min_confidence:
-            self.memory.log_session(
-                f"🛡️ {instrument}: confiance trop faible "
-                f"({decision['confidence']:.0%} < {self.min_confidence:.0%})"
-            )
-            return self._wait(f"Confiance insuffisante ({decision['confidence']:.0%})")
+        # Confidence check — le fallback technique a confidence=0.40,
+        # ce qui est < min_confidence (0.60) donc il sera bloqué ici
+        # sauf si on le laisse passer explicitement via risk_note
+        if decision.get("risk_note") != "technical_fallback":
+            if decision["confidence"] < self.min_confidence:
+                self.memory.log_session(
+                    f"🛡️ {instrument}: confiance trop faible "
+                    f"({decision['confidence']:.0%} < {self.min_confidence:.0%})"
+                )
+                return self._wait(f"Confiance insuffisante ({decision['confidence']:.0%})")
 
         # Daily loss limit
         if ctx["today_pnl"] <= DAILY_LOSS_LIMIT:
@@ -692,7 +762,7 @@ RISK: {'APPROUVÉ' if risk.get('approved') else 'BLOQUÉ'} risque={risk.get('ris
             decision["take_profit_pips"] = max(decision["stop_loss_pips"], int(atr_pips * 2))
 
         # Risk multiplier from memory + protections + confluence
-        risk_mult = (
+        risk_mult = decision.get("risk_multiplier", 1.0) * (
             ctx["learning"]["risk_multiplier"]
             * ctx["protections"]["risk_adjustment"]
         )

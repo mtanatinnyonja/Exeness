@@ -56,6 +56,11 @@ LLM_ANALYSIS_NOTES = os.getenv(
 LLM_MAX_CONTEXT_BARS = int(os.getenv("LLM_MAX_CONTEXT_BARS", "60"))
 ONLY_ALLOW_LOCAL_LLM = True
 
+# === FALLBACK TECHNIQUE (si LLM indisponible) ===
+# True  = utilise les signaux techniques purs si Ollama plante (score >= 4 requis)
+# False = WAIT systématique — comportement original, plus conservateur
+LLM_FALLBACK_TECHNICAL = os.getenv("LLM_FALLBACK_TECHNICAL", "true").strip().lower() == "true"
+
 # === CAPITAL & RISK ===
 INITIAL_CAPITAL = 50.0
 MAX_RISK_PER_TRADE = 0.02
