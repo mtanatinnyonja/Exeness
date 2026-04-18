@@ -493,7 +493,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
     </div>
     <div class="panel-body" style="display:grid;grid-template-columns:1fr 1fr 2fr 1fr;gap:12px;">
       <div>
-        <div class="kpi-label">Mode symboles</div>
+        <div class="kpi-label">Filtre actif</div>
         <div class="kpi-value accent" id="symbol-mode" style="font-size:16px;">—</div>
       </div>
       <div>
@@ -501,7 +501,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
         <div class="kpi-value accent" id="ai-provider" style="font-size:16px;">—</div>
       </div>
       <div>
-        <div class="kpi-label">Symboles MT5 visibles</div>
+        <div class="kpi-label">Symboles tradés</div>
         <div class="refresh-info" id="active-symbols" style="white-space:normal;line-height:1.6;">—</div>
       </div>
       <div>
@@ -656,13 +656,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
             <option value="false">false</option>
           </select>
         </div>
-        <div class="field">
-          <label>Sélection paires</label>
-          <select id="setting-symbol-selection-mode">
-            <option value="smart">smart · scan auto</option>
-            <option value="preferred">preferred · statique</option>
-          </select>
-        </div>
+
       </div>
       <div style="margin-top:10px;display:flex;gap:10px;align-items:center;">
         <button class="btn" onclick="testTelegram()">Tester Telegram</button>
@@ -965,7 +959,6 @@ function populateSettings(data) {
 
   // Telegram + dynamic pairs
   document.getElementById('setting-telegram-enabled').value = String(settings.telegram_enabled ?? true);
-  document.getElementById('setting-symbol-selection-mode').value = settings.symbol_selection_mode || 'smart';
   document.getElementById('tg-status').textContent = (settings.telegram_enabled ?? true) ? 'actif' : 'désactivé';
 
   const ml = data.ml_stats || {};
@@ -1005,7 +998,7 @@ async function saveSettings(silent = false) {
     llm_analysis_notes: document.getElementById('setting-analysis-notes').value,
     allow_trade_execution: document.getElementById('setting-allow-trade').value === 'true',
     telegram_enabled: document.getElementById('setting-telegram-enabled').value === 'true',
-    symbol_selection_mode: document.getElementById('setting-symbol-selection-mode').value
+    symbol_selection_mode: 'smart'
   };
 
   const res = await fetch('/api/settings', {
@@ -1581,16 +1574,16 @@ async function fetchStatus() {
     }
 
     // Config active
-    const scanMode = data.settings?.symbol_selection_mode || data.smart_scan?.mode || '—';
-    const scanLabel = scanMode === 'smart' ? '🔍 smart scan' : scanMode === 'preferred' ? '📌 statique' : scanMode;
-    document.getElementById('symbol-mode').textContent = scanLabel;
+    const prefFilter = (data.settings?.preferred_symbols || '').trim();
+    const filterLabel = prefFilter ? '🎯 ' + prefFilter : '🔍 toutes les paires';
+    document.getElementById('symbol-mode').textContent = filterLabel;
     document.getElementById('ai-provider').textContent = data.ai_provider || '—';
     const symList = data.active_symbols || [];
     const scanInfo = data.smart_scan || {};
     const rejCount = (scanInfo.rejected || []).length;
     const candCount = (scanInfo.candidates || []).length;
     let symText = symList.join(', ') || '—';
-    if (scanMode === 'smart' && (candCount || rejCount)) {
+    if (candCount || rejCount) {
       symText += ' (' + candCount + ' analysées, ' + rejCount + ' rejetées)';
     }
     document.getElementById('active-symbols').textContent = symText;
@@ -1600,7 +1593,7 @@ async function fetchStatus() {
     if (modeNote) {
       modeNote.textContent = allowTrade
         ? 'Le cockpit affiche un signal IA en aperçu sur la paire active. Un ordre réel MT5 n\'est envoyé que par le cycle automatique quand toutes les validations sont encore confirmées.'
-        : 'Le bot autonome analyse la paire active en continu. Active le trading réel démo pour autoriser les ouvertures et fermetures automatiques.';
+        : 'L\'agent autonome analyse la paire active en continu. Active le trading réel démo pour autoriser les ouvertures et fermetures automatiques.';
     }
     syncFocusPairs(data.active_symbols || [], data.trending_pairs || []);
 
@@ -1608,7 +1601,7 @@ async function fetchStatus() {
     const fb = document.getElementById('features-bar');
     if (fb) {
       const features = [
-        {label: '🔍 Smart Scan', on: (data.settings?.symbol_selection_mode || 'smart') === 'smart'},
+        {label: '🔍 Smart Scan', on: true},
         {label: '📱 Telegram', on: String(data.settings?.telegram_enabled ?? true) === 'true'},
         {label: '🛡️ Protections', on: true},
         {label: '📰 Calendrier', on: true},
