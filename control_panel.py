@@ -8,6 +8,7 @@ Accès: http://localhost:8080
 import json
 import os
 import sys
+from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -21,23 +22,23 @@ HTML_PAGE = r"""<!DOCTYPE html>
 <title>Agent IA MT5 · Trading Autonome</title>
 <style>
   :root {
-    --bg: #0a0a0f;
-    --bg2: #111118;
-    --bg3: #18181f;
+    --bg: #071018;
+    --bg2: #0d1823;
+    --bg3: #132334;
     --border: rgba(255,255,255,0.06);
     --border2: rgba(255,255,255,0.12);
-    --text: #e8e8f0;
-    --muted: #6b6b80;
-    --accent: #7c6af7;
-    --accent2: #a89cf7;
+    --text: #e7f0f8;
+    --muted: #7f96aa;
+    --accent: #00a6a6;
+    --accent2: #5eead4;
     --green: #3dffa0;
     --green2: #1a7a4a;
     --red: #ff5757;
     --red2: #7a1a1a;
-    --amber: #ffb847;
+    --amber: #ffc857;
     --teal: #3dd9ff;
     --mono: Consolas, 'Courier New', monospace;
-    --sans: 'Segoe UI', Arial, sans-serif;
+    --sans: 'Bahnschrift', 'Trebuchet MS', 'Segoe UI', sans-serif;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -54,8 +55,8 @@ HTML_PAGE = r"""<!DOCTYPE html>
     position: fixed;
     inset: 0;
     background-image:
-      linear-gradient(rgba(124,106,247,0.03) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(124,106,247,0.03) 1px, transparent 1px);
+      linear-gradient(rgba(61,217,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,166,166,0.03) 1px, transparent 1px);
     background-size: 40px 40px;
     pointer-events: none;
     z-index: 0;
@@ -133,7 +134,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
   .panel {
     background: var(--bg2);
     border: 1px solid var(--border);
-    border-radius: 14px;
+    border-radius: 16px;
     overflow: hidden;
   }
   .panel-header {
@@ -645,7 +646,14 @@ HTML_PAGE = r"""<!DOCTYPE html>
             <option value="false">false</option>
           </select>
         </div>
-
+        <div class="field">
+          <label>Bot Token</label>
+          <input type="password" id="setting-telegram-token" placeholder="123456:ABCdef..." style="font-family:monospace;" oninput="scheduleAutoSave()">
+        </div>
+        <div class="field">
+          <label>Chat ID</label>
+          <input type="text" id="setting-telegram-chatid" placeholder="-1001234567890" style="font-family:monospace;" oninput="scheduleAutoSave()">
+        </div>
       </div>
       <div style="margin-top:10px;display:flex;gap:10px;align-items:center;">
         <button class="btn" onclick="testTelegram()">Tester Telegram</button>
@@ -688,59 +696,15 @@ HTML_PAGE = r"""<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- MULTI-AGENT EXCHANGE VIEWER -->
-  <div class="ai-exchange" style="margin-bottom:16px;">
-    <div class="ai-exchange-header" onclick="toggleAiExchange()">
-      <span class="panel-title">🤖 Pipeline Multi-Agents (dernière analyse)</span>
-      <span class="toggle-arrow" id="ai-exchange-arrow">▼</span>
+  <!-- AGENT STATUS PANEL -->
+  <div class="ai-exchange" style="margin-bottom:16px;" id="agents-status-panel">
+    <div class="ai-exchange-header" onclick="toggleAgentsStatus()">
+      <span class="panel-title">🤖 Statut des Agents</span>
+      <span id="agents-status-badge" style="padding:2px 8px;border-radius:4px;font-size:0.75em;margin-left:8px;background:var(--muted);color:#fff;">—</span>
+      <span class="toggle-arrow" id="agents-status-arrow">▼</span>
     </div>
-    <div class="ai-exchange-body" id="ai-exchange-body">
-      <div class="ai-exchange-meta" id="ai-exchange-meta">
-        <span>Instrument: <strong id="ai-ex-instrument">—</strong></span>
-        <span>Modèle: <strong id="ai-ex-model">—</strong></span>
-        <span>Heure: <strong id="ai-ex-time">—</strong></span>
-      </div>
-
-      <!-- Agent tabs -->
-      <div id="agent-tabs" style="display:flex;gap:6px;margin:10px 0;">
-        <button class="btn" style="font-size:0.75em;padding:4px 10px;" onclick="showAgentTab('analyste')" id="tab-analyste">📊 Analyste</button>
-        <button class="btn secondary" style="font-size:0.75em;padding:4px 10px;" onclick="showAgentTab('risk')" id="tab-risk">🛡️ Risk Manager</button>
-        <button class="btn secondary" style="font-size:0.75em;padding:4px 10px;" onclick="showAgentTab('decideur')" id="tab-decideur">⚖️ Décideur</button>
-        <button class="btn secondary" style="font-size:0.75em;padding:4px 10px;" onclick="showAgentTab('raw')" id="tab-raw">📝 Brut</button>
-      </div>
-
-      <!-- Analyste tab -->
-      <div id="agent-view-analyste" class="agent-tab-view">
-        <div class="ai-msg" style="background:rgba(61,255,160,0.04);border:1px solid rgba(61,255,160,0.12);border-left:3px solid var(--green);">
-          <div class="ai-msg-label" style="color:var(--green);">📊 AGENT ANALYSTE</div>
-          <div id="ai-agent-analyste" style="color:var(--text);white-space:pre-wrap;">En attente...</div>
-        </div>
-      </div>
-      <!-- Risk tab -->
-      <div id="agent-view-risk" class="agent-tab-view" style="display:none;">
-        <div class="ai-msg" style="background:rgba(255,184,71,0.04);border:1px solid rgba(255,184,71,0.12);border-left:3px solid var(--amber);">
-          <div class="ai-msg-label" style="color:var(--amber);">🛡️ AGENT RISK MANAGER</div>
-          <div id="ai-agent-risk" style="color:var(--text);white-space:pre-wrap;">En attente...</div>
-        </div>
-      </div>
-      <!-- Decideur tab -->
-      <div id="agent-view-decideur" class="agent-tab-view" style="display:none;">
-        <div class="ai-msg" style="background:rgba(99,102,241,0.06);border:1px solid rgba(99,102,241,0.12);border-left:3px solid #6366f1;">
-          <div class="ai-msg-label" style="color:#6366f1;">⚖️ AGENT DÉCIDEUR</div>
-          <div id="ai-agent-decideur" style="color:var(--text);white-space:pre-wrap;">En attente...</div>
-        </div>
-      </div>
-      <!-- Raw tab -->
-      <div id="agent-view-raw" class="agent-tab-view" style="display:none;">
-        <div class="ai-msg ai-msg-prompt">
-          <div class="ai-msg-label prompt-label">🧠 PROMPT ENVOYÉ</div>
-          <div id="ai-ex-prompt" style="color:var(--text)">Aucune analyse effectuée.</div>
-        </div>
-        <div class="ai-msg ai-msg-response">
-          <div class="ai-msg-label response-label">💬 RÉPONSES BRUTES</div>
-          <div id="ai-ex-raw-response" style="color:var(--text)">—</div>
-        </div>
-      </div>
+    <div class="ai-exchange-body" id="agents-status-body">
+      <div id="agents-status-list" style="display:flex;flex-direction:column;gap:8px;font-size:0.88em;"></div>
     </div>
   </div>
 
@@ -756,63 +720,47 @@ HTML_PAGE = r"""<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- PRO STRATEGIES -->
+  <!-- PRO STRATEGIES / LAST SCAN -->
   <div class="ai-exchange" style="margin-bottom:16px;" id="strategies-panel">
     <div class="ai-exchange-header" onclick="toggleStrategies()">
-      <span class="panel-title">🎯 Stratégies Pro</span>
+      <span class="panel-title">🎯 Dernière Analyse (Analyste)</span>
       <span id="session-badge" style="padding:2px 8px;border-radius:4px;font-size:0.75em;margin-left:8px;"></span>
       <span class="toggle-arrow" id="strategies-arrow">▼</span>
     </div>
     <div class="ai-exchange-body" id="strategies-body">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-        <!-- Session / Kill Zone -->
-        <div style="background:rgba(255,255,255,0.03);padding:10px;border-radius:8px;">
-          <div style="color:var(--amber);font-weight:600;margin-bottom:6px;">🕐 Session</div>
-          <div id="strat-session" style="color:var(--text);font-size:0.85em;">—</div>
-        </div>
-        <!-- HTF Bias -->
-        <div style="background:rgba(255,255,255,0.03);padding:10px;border-radius:8px;">
-          <div style="color:var(--amber);font-weight:600;margin-bottom:6px;">📊 HTF Bias (H4/D1)</div>
-          <div id="strat-htf" style="color:var(--text);font-size:0.85em;">—</div>
-        </div>
-        <!-- Smart Money -->
-        <div style="background:rgba(255,255,255,0.03);padding:10px;border-radius:8px;">
-          <div style="color:var(--amber);font-weight:600;margin-bottom:6px;">🏦 Smart Money (ICT)</div>
-          <div id="strat-smc" style="color:var(--text);font-size:0.85em;">—</div>
-        </div>
-        <!-- Corrélation -->
-        <div style="background:rgba(255,255,255,0.03);padding:10px;border-radius:8px;">
-          <div style="color:var(--amber);font-weight:600;margin-bottom:6px;">🔗 Corrélation</div>
-          <div id="strat-corr" style="color:var(--text);font-size:0.85em;">—</div>
-        </div>
+      <div id="strat-scan-table" style="font-size:0.85em;">En attente du scan...</div>
+      <div style="margin-top:8px;display:flex;gap:16px;font-size:0.82em;">
+        <div>Session: <strong id="strat-session-label" style="color:var(--amber);">—</strong></div>
+        <div>Candidats: <strong id="strat-count" style="color:var(--green);">—</strong></div>
+        <div>Dernière analyse: <strong id="strat-last-ts" style="color:var(--muted);">—</strong></div>
       </div>
     </div>
   </div>
 
-  <!-- MARKET PROTECTIONS -->
+  <!-- CIRCUIT BREAKER / PROTECTIONS -->
   <div class="ai-exchange" style="margin-bottom:16px;" id="protections-panel">
     <div class="ai-exchange-header" onclick="toggleProtections()">
-      <span class="panel-title">🛡️ Protections Anti-Manipulation</span>
+      <span class="panel-title">🛡️ Circuit Breaker &amp; Protections</span>
       <span id="protection-badge" style="padding:2px 8px;border-radius:4px;font-size:0.75em;margin-left:8px;"></span>
       <span class="toggle-arrow" id="protections-arrow">▼</span>
     </div>
     <div class="ai-exchange-body" id="protections-body">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
         <div style="background:rgba(255,255,255,0.03);padding:10px;border-radius:8px;">
-          <div style="color:var(--teal);font-weight:600;margin-bottom:6px;">📡 Spread & Slippage</div>
-          <div id="prot-spread" style="color:var(--text);font-size:0.85em;">—</div>
+          <div style="color:var(--teal);font-weight:600;margin-bottom:6px;">🔌 État du Circuit Breaker</div>
+          <div id="prot-cb-state" style="color:var(--text);font-size:0.85em;">—</div>
         </div>
         <div style="background:rgba(255,255,255,0.03);padding:10px;border-radius:8px;">
-          <div style="color:var(--teal);font-weight:600;margin-bottom:6px;">👻 Ghost Candles & News Spike</div>
-          <div id="prot-ghost" style="color:var(--text);font-size:0.85em;">—</div>
+          <div style="color:var(--teal);font-weight:600;margin-bottom:6px;">📉 Pertes Consécutives</div>
+          <div id="prot-losses" style="color:var(--text);font-size:0.85em;">—</div>
         </div>
         <div style="background:rgba(255,255,255,0.03);padding:10px;border-radius:8px;">
-          <div style="color:var(--teal);font-weight:600;margin-bottom:6px;">💧 Liquidity Sweep (SMC)</div>
-          <div id="prot-sweep" style="color:var(--text);font-size:0.85em;">—</div>
+          <div style="color:var(--teal);font-weight:600;margin-bottom:6px;">📊 P&L Journalier</div>
+          <div id="prot-daily" style="color:var(--text);font-size:0.85em;">—</div>
         </div>
         <div style="background:rgba(255,255,255,0.03);padding:10px;border-radius:8px;">
-          <div style="color:var(--teal);font-weight:600;margin-bottom:6px;">📐 Structure BOS/CHoCH</div>
-          <div id="prot-structure" style="color:var(--text);font-size:0.85em;">—</div>
+          <div style="color:var(--teal);font-weight:600;margin-bottom:6px;">📰 Pause News</div>
+          <div id="prot-news" style="color:var(--text);font-size:0.85em;">—</div>
         </div>
       </div>
       <div id="prot-alerts" style="margin-top:10px;font-size:0.82em;color:var(--muted);"></div>
@@ -956,7 +904,10 @@ function colorVal(el, val) {
 
 function populateSettings(data) {
   const settings = data.settings || {};
-  document.getElementById('setting-preferred-symbols').value = (settings.preferred_symbols || []).join(',');
+  const preferredSymbols = Array.isArray(settings.preferred_symbols)
+    ? settings.preferred_symbols.join(',')
+    : String(settings.preferred_symbols || '');
+  document.getElementById('setting-preferred-symbols').value = preferredSymbols;
   document.getElementById('setting-max-symbols').value = settings.max_symbols_per_cycle || 3;
   document.getElementById('setting-check-interval').value = settings.check_interval_minutes || 15;
   document.getElementById('setting-risk').value = settings.max_risk_per_trade || 0.02;
@@ -975,15 +926,16 @@ function populateSettings(data) {
   // Telegram + dynamic pairs
   document.getElementById('setting-telegram-enabled').value = String(settings.telegram_enabled ?? true);
   document.getElementById('tg-status').textContent = (settings.telegram_enabled ?? true) ? 'actif' : 'désactivé';
+  if (settings.telegram_bot_token) document.getElementById('setting-telegram-token').value = settings.telegram_bot_token;
+  if (settings.telegram_chat_id) document.getElementById('setting-telegram-chatid').value = settings.telegram_chat_id;
 
-  // Update agent pipeline status from last exchange
-  const parsed = data.last_ai_exchange?.parsed_response;
-  if (parsed && typeof parsed === 'object') {
-    const agents = [];
-    if (parsed.analyste) agents.push('Analyste ✅');
-    if (parsed.risk) agents.push('Risk ' + (parsed.risk.approved ? '✅' : '❌'));
-    if (parsed.decideur) agents.push('Décideur ✅');
-    document.getElementById('agent-pipeline-status').textContent = agents.join(' → ') || '—';
+  // Agent pipeline status: show from heartbeat data
+  const agentData = data.agents || [];
+  if (agentData.length > 0) {
+    const running = agentData.filter(a => a.status === 'running').map(a => a.name.replace('Agent', '') + ' ✅');
+    const stopped = agentData.filter(a => a.status !== 'running').map(a => a.name.replace('Agent', '') + ' 🔴');
+    const all = [...running, ...stopped];
+    document.getElementById('agent-pipeline-status').textContent = all.join(' → ') || '—';
   }
 }
 
@@ -1014,6 +966,8 @@ async function saveSettings(silent = false) {
     llm_analysis_notes: document.getElementById('setting-analysis-notes').value,
     allow_trade_execution: document.getElementById('setting-allow-trade').value === 'true',
     telegram_enabled: document.getElementById('setting-telegram-enabled').value === 'true',
+    telegram_bot_token: document.getElementById('setting-telegram-token').value.trim(),
+    telegram_chat_id: document.getElementById('setting-telegram-chatid').value.trim(),
   };
 
   const res = await fetch('/api/settings', {
@@ -1189,8 +1143,9 @@ function toggleAiExchange() {
 function toggleCalendar() {
   const body = document.getElementById('calendar-body');
   const arrow = document.getElementById('calendar-arrow');
-  const isOpen = body.classList.toggle('open');
-  arrow.classList.toggle('open', isOpen);
+  const isClosed = getComputedStyle(body).display === 'none';
+  body.style.display = isClosed ? 'block' : 'none';
+  arrow.textContent = isClosed ? '▼' : '▶';
 }
 
 function renderCalendar(cal) {
@@ -1231,86 +1186,87 @@ function renderCalendar(cal) {
 function toggleStrategies() {
   const body = document.getElementById('strategies-body');
   const arrow = document.getElementById('strategies-arrow');
-  const isOpen = body.classList.toggle('open');
-  arrow.classList.toggle('open', isOpen);
+  const isClosed = getComputedStyle(body).display === 'none';
+  body.style.display = isClosed ? 'block' : 'none';
+  arrow.textContent = isClosed ? '▼' : '▶';
 }
 
 function renderStrategies(strat) {
   if (!strat) return;
-  const sessionBadge = document.getElementById('session-badge');
-  const sess = strat.session || {};
-  if (sess.label) {
-    const q = sess.instrument_quality || 0;
-    const color = q >= 0.7 ? '#00e676' : q >= 0.4 ? '#f39c12' : '#e74c3c';
-    sessionBadge.style.background = color;
-    sessionBadge.style.color = '#000';
-    sessionBadge.textContent = sess.label + ' (' + Math.round(q * 100) + '%)';
+  const badge = document.getElementById('session-badge');
+  const candidates = strat.candidates || [];
+  const session = strat.session || '—';
+  const ts = strat.timestamp || '';
+
+  // Badge
+  const n = candidates.length;
+  badge.style.background = n > 0 ? 'var(--green)' : 'var(--muted)';
+  badge.style.color = n > 0 ? '#000' : '#fff';
+  badge.textContent = n + ' signal' + (n > 1 ? 's' : '');
+
+  document.getElementById('strat-session-label').textContent = session;
+  document.getElementById('strat-count').textContent = n;
+  document.getElementById('strat-last-ts').textContent = ts ? ts.replace('T', ' ').slice(0, 19) : '—';
+
+  const wrap = document.getElementById('strat-scan-table');
+  if (candidates.length === 0) {
+    wrap.innerHTML = '<span style="color:var(--muted);">Aucun signal en attente</span>';
+    return;
   }
-  // Session
-  const sessDiv = document.getElementById('strat-session');
-  if (sess.label) {
-    const kz = sess.is_kill_zone ? '✅ KILL ZONE' : '⏳ Hors Kill Zone';
-    sessDiv.innerHTML = '<strong>' + sess.label + '</strong><br>' + kz +
-      '<br>Qualité: <strong>' + Math.round((sess.instrument_quality || 0) * 100) + '%</strong>' +
-      '<br><span style="opacity:0.7;">' + (sess.recommendation || '') + '</span>';
-  }
-  // HTF Bias
-  const htfDiv = document.getElementById('strat-htf');
-  const htf = strat.htf_bias || {};
-  if (htf.combined) {
-    const biasColor = htf.combined === 'bullish' ? '#00e676' : htf.combined === 'bearish' ? '#e74c3c' : htf.combined === 'conflict' ? '#f39c12' : '#888';
-    const arrow = htf.trade_with === 'BUY' ? '↑' : htf.trade_with === 'SELL' ? '↓' : '↔';
-    htfDiv.innerHTML = 'H4: <strong style="color:' + biasColor + '">' + (htf.h4 || '?') + '</strong> | ' +
-      'D1: <strong style="color:' + biasColor + '">' + (htf.d1 || '?') + '</strong><br>' +
-      'Combiné: <strong style="color:' + biasColor + '">' + arrow + ' ' + (htf.combined || '?') + '</strong>' +
-      (htf.trade_with ? '<br>Trader: <strong>' + htf.trade_with + '</strong>' : '') +
-      '<br><span style="opacity:0.7;">' + (htf.context || '') + '</span>';
-  }
-  // Smart Money
-  const smcDiv = document.getElementById('strat-smc');
-  const smc = strat.smart_money || {};
-  const smcBias = smc.bias || 'neutral';
-  const smcColor = smcBias === 'bullish' ? '#00e676' : smcBias === 'bearish' ? '#e74c3c' : '#888';
-  smcDiv.innerHTML = 'FVG: <strong>' + (smc.fvg_count || 0) + '</strong> | ' +
-    'Order Blocks: <strong>' + (smc.ob_count || 0) + '</strong><br>' +
-    'Biais: <strong style="color:' + smcColor + '">' + smcBias + '</strong><br>' +
-    '<span style="opacity:0.7;font-size:0.85em;">' + (smc.zones || 'Aucune zone active') + '</span>';
-  // Corrélation
-  const corrDiv = document.getElementById('strat-corr');
-  const corrs = strat.open_correlations || [];
-  if (corrs.length === 0) {
-    corrDiv.innerHTML = '<span style="color:#00e676;">✅ Pas de risque de corrélation</span>';
-  } else {
-    let corrHtml = '';
-    corrs.forEach(c => {
-      if (c.blocked) corrHtml += '<div style="color:#e74c3c;">🚫 ' + c.reason + '</div>';
-      else if (c.warnings && c.warnings.length) corrHtml += '<div style="color:#f39c12;">' + c.warnings[0] + '</div>';
-      else corrHtml += '<div style="color:#00e676;">✅ OK</div>';
-    });
-    corrDiv.innerHTML = corrHtml;
-  }
+  const rows = candidates.map(c => {
+    const dirColor = c.signal_direction === 'BUY' ? 'var(--green)' : 'var(--red)';
+    const scoreVal = Number(c.score ?? 0);
+    const spreadVal = Number(c.spread ?? 0);
+    const scoreBar = Math.min(100, Math.round(scoreVal * 100));
+    return '<tr style="border-bottom:1px solid rgba(255,255,255,0.04);">' +
+      '<td style="padding:4px 8px;font-weight:600;">' + (c.symbol || '—') + '</td>' +
+      '<td style="padding:4px 8px;color:' + dirColor + ';font-weight:600;">' + (c.signal_direction || '—') + '</td>' +
+      '<td style="padding:4px 8px;">' +
+        '<div style="display:flex;align-items:center;gap:4px;">' +
+          '<div style="width:50px;height:5px;background:var(--border);border-radius:3px;overflow:hidden;">' +
+            '<div style="width:' + scoreBar + '%;height:100%;background:var(--green);border-radius:3px;"></div></div>' +
+          '<span style="font-size:0.8em;color:var(--green);">' + scoreVal.toFixed(2) + '</span></div>' +
+      '</td>' +
+      '<td style="padding:4px 8px;font-size:0.82em;color:var(--muted);">' + (c.regime || '—') + '</td>' +
+        '<td style="padding:4px 8px;font-size:0.82em;color:var(--amber);">' +
+      ((c.spread !== undefined && c.spread !== null) ? spreadVal.toFixed(1) + 'p' : '—') + '</td></tr>';
+  }).join('');
+  wrap.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:0.82em;">' +
+    '<thead><tr style="color:var(--muted);"><th style="padding:4px 8px;text-align:left;">Paire</th>' +
+    '<th style="padding:4px 8px;text-align:left;">Signal</th>' +
+    '<th style="padding:4px 8px;text-align:left;">Score</th>' +
+    '<th style="padding:4px 8px;text-align:left;">Régime</th>' +
+    '<th style="padding:4px 8px;text-align:left;">Spread</th></tr></thead><tbody>' + rows + '</tbody></table>';
 }
 
 function toggleScanner() {
   const body = document.getElementById('scanner-body');
   const arrow = document.getElementById('scanner-arrow');
-  if (body.style.display === 'none') { body.style.display = 'block'; arrow.textContent = '▼'; }
-  else { body.style.display = 'none'; arrow.textContent = '▶'; }
+  const isClosed = getComputedStyle(body).display === 'none';
+  body.style.display = isClosed ? 'block' : 'none';
+  arrow.textContent = isClosed ? '▼' : '▶';
 }
 
 function toggleTrending() {
   const body = document.getElementById('trending-body');
   const arrow = document.getElementById('trending-arrow');
-  if (body.style.display === 'none') { body.style.display = 'block'; arrow.textContent = '▼'; }
-  else { body.style.display = 'none'; arrow.textContent = '▶'; }
+  const isClosed = getComputedStyle(body).display === 'none';
+  body.style.display = isClosed ? 'block' : 'none';
+  arrow.textContent = isClosed ? '▼' : '▶';
 }
 
 function renderTrending(pairs) {
-  if (!pairs || !pairs.length) return;
   const badge = document.getElementById('trending-badge');
   const tableDiv = document.getElementById('trending-table');
-  const trending = pairs.filter(p => p.trending_score > 0);
-  const neutral = pairs.filter(p => p.trending_score <= 0);
+  if (!pairs || !pairs.length) {
+    badge.textContent = '0 en tendance / 0 total';
+    badge.style.background = 'var(--muted)';
+    badge.style.color = '#fff';
+    tableDiv.innerHTML = '<span style="color:var(--muted);">Aucune donnée de tendance pour le moment</span>';
+    return;
+  }
+  const trending = pairs.filter(p => Number(p.trending_score ?? 0) > 0);
+  const neutral = pairs.filter(p => Number(p.trending_score ?? 0) <= 0);
 
   badge.textContent = trending.length + ' en tendance / ' + pairs.length + ' total';
   badge.style.background = trending.length > 0 ? 'var(--green)' : 'var(--muted)';
@@ -1322,11 +1278,14 @@ function renderTrending(pairs) {
   }
 
   let rows = pairs.map((p, i) => {
-    const isTrending = p.trending_score > 0;
+    const trendingScore = Number(p.trending_score ?? 0);
+    const isTrending = trendingScore > 0;
     const dirColor = p.direction === 'BUY' ? 'var(--green)' : p.direction === 'SELL' ? 'var(--red)' : 'var(--muted)';
     const dirIcon = p.direction === 'BUY' ? '🟢' : p.direction === 'SELL' ? '🔴' : '⚪';
     const regimeColor = (p.regime || '').includes('bullish') ? 'var(--green)' : (p.regime || '').includes('bearish') ? 'var(--red)' : 'var(--muted)';
-    const trendBar = Math.min(100, Math.round(p.trending_score * 10));
+    const trendBar = Math.min(100, Math.round(trendingScore * 10));
+    const rsiVal = Number(p.rsi ?? 50);
+    const qualityVal = Number(p.quality ?? 0);
     const bg = isTrending ? 'rgba(61,255,160,0.06)' : '';
     return '<tr style="background:' + bg + ';">' +
       '<td style="padding:4px 8px;color:var(--text);">' + (i + 1) + '</td>' +
@@ -1337,12 +1296,12 @@ function renderTrending(pairs) {
           '<div style="width:60px;height:6px;background:var(--border);border-radius:3px;overflow:hidden;">' +
             '<div style="width:' + trendBar + '%;height:100%;background:' + (isTrending ? 'var(--green)' : 'var(--muted)') + ';border-radius:3px;"></div>' +
           '</div>' +
-          '<span style="font-size:0.8em;color:' + (isTrending ? 'var(--green)' : 'var(--muted)') + ';">' + p.trending_score.toFixed(1) + '</span>' +
+          '<span style="font-size:0.8em;color:' + (isTrending ? 'var(--green)' : 'var(--muted)') + ';">' + trendingScore.toFixed(1) + '</span>' +
         '</div>' +
       '</td>' +
       '<td style="padding:4px 8px;color:' + regimeColor + ';font-size:0.82em;">' + (p.regime || '—') + '</td>' +
-      '<td style="padding:4px 8px;font-size:0.82em;">RSI ' + (p.rsi || 50).toFixed(0) + '</td>' +
-      '<td style="padding:4px 8px;font-size:0.82em;color:var(--accent);">' + (p.quality || 0).toFixed(2) + '</td></tr>';
+      '<td style="padding:4px 8px;font-size:0.82em;">RSI ' + rsiVal.toFixed(0) + '</td>' +
+      '<td style="padding:4px 8px;font-size:0.82em;color:var(--accent);">' + qualityVal.toFixed(2) + '</td></tr>';
   }).join('');
 
   tableDiv.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:0.82em;">' +
@@ -1359,10 +1318,12 @@ function renderTrending(pairs) {
 function renderScanner(scan) {
   if (!scan) return;
   const badge = document.getElementById('scanner-badge');
-  const mode = scan.mode || 'unknown';
-  const selected = scan.selected || [];
+  const mode = scan.mode || 'smart';
   const candidates = scan.candidates || [];
   const rejected = scan.rejected || [];
+  const selected = (scan.selected && scan.selected.length)
+    ? scan.selected
+    : candidates.map(c => c.symbol).filter(Boolean);
 
   // Badge
   if (mode === 'smart') {
@@ -1384,12 +1345,16 @@ function renderScanner(scan) {
         '<span style="padding:1px 5px;border-radius:3px;font-size:0.7em;' +
         (t === 'major' ? 'background:#2a5d96;color:#8fc' : 'background:#5d2a96;color:#c8f') + ';">' + t + '</span>'
       ).join(' ');
-      const pctColor = c.spread_pct < 30 ? 'var(--green)' : c.spread_pct < 60 ? 'var(--amber)' : 'var(--red)';
+      const spreadVal = Number(c.spread ?? 0);
+      const maxSpreadVal = Number(c.max_spread ?? 0);
+      const spreadPct = c.spread_pct !== undefined ? Number(c.spread_pct) : (maxSpreadVal > 0 ? (spreadVal / maxSpreadVal) * 100 : 0);
+      const priorityVal = Number(c.priority ?? c.score ?? 0);
+      const pctColor = spreadPct < 30 ? 'var(--green)' : spreadPct < 60 ? 'var(--amber)' : 'var(--red)';
       return '<div style="display:flex;align-items:center;gap:8px;padding:3px 0;border-bottom:1px solid var(--border);">' +
         '<strong style="min-width:90px;">' + c.symbol + '</strong>' +
-        '<span style="color:' + pctColor + ';">' + c.spread + 'p</span>' +
-        '<span style="color:var(--muted);font-size:0.8em;">(' + c.spread_pct + '% du max)</span>' +
-        '<span style="color:var(--accent);font-size:0.8em;">★ ' + c.priority.toFixed(2) + '</span>' +
+        '<span style="color:' + pctColor + ';">' + spreadVal.toFixed(1) + 'p</span>' +
+        '<span style="color:var(--muted);font-size:0.8em;">(' + spreadPct.toFixed(0) + '% du max)</span>' +
+        '<span style="color:var(--accent);font-size:0.8em;">★ ' + priorityVal.toFixed(2) + '</span>' +
         tags + '</div>';
     }).join('');
   } else {
@@ -1404,7 +1369,7 @@ function renderScanner(scan) {
     rejDiv.innerHTML = rejected.map(r =>
       '<div style="padding:2px 0;font-size:0.82em;">' +
       '<span style="min-width:90px;display:inline-block;">' + r.symbol + '</span> ' +
-      '<span style="color:var(--red);">' + r.spread + 'p > ' + r.max_spread + 'p</span></div>'
+      '<span style="color:var(--red);">' + (r.spread ?? '—') + 'p > ' + (r.max_spread ?? '—') + 'p</span></div>'
     ).join('');
   } else {
     rejDiv.innerHTML = '<span style="color:var(--green);">Aucune paire rejetée</span>';
@@ -1415,15 +1380,19 @@ function renderScanner(scan) {
   if (candidates.length > 0) {
     let rows = candidates.map((c, i) => {
       const isSel = selected.includes(c.symbol);
-      const bg = isSel ? 'rgba(124,106,247,0.08)' : '';
-      const pctColor = c.spread_pct < 30 ? 'var(--green)' : c.spread_pct < 60 ? 'var(--amber)' : 'var(--red)';
+      const bg = isSel ? 'rgba(0,166,166,0.10)' : '';
+      const spreadVal = Number(c.spread ?? 0);
+      const maxSpreadVal = Number(c.max_spread ?? 0);
+      const spreadPct = c.spread_pct !== undefined ? Number(c.spread_pct) : (maxSpreadVal > 0 ? (spreadVal / maxSpreadVal) * 100 : 0);
+      const priorityVal = Number(c.priority ?? c.score ?? 0);
+      const pctColor = spreadPct < 30 ? 'var(--green)' : spreadPct < 60 ? 'var(--amber)' : 'var(--red)';
       return '<tr style="background:' + bg + ';">' +
         '<td style="padding:4px 8px;color:var(--text);">' + (i + 1) + '</td>' +
         '<td style="padding:4px 8px;font-weight:600;">' + c.symbol + (isSel ? ' ✅' : '') + '</td>' +
-        '<td style="padding:4px 8px;color:' + pctColor + ';">' + c.spread + '</td>' +
-        '<td style="padding:4px 8px;color:var(--muted);">' + c.max_spread + '</td>' +
-        '<td style="padding:4px 8px;color:var(--accent);">' + c.priority.toFixed(3) + '</td>' +
-        '<td style="padding:4px 8px;color:' + pctColor + ';">' + c.spread_pct + '%</td>' +
+        '<td style="padding:4px 8px;color:' + pctColor + ';">' + spreadVal.toFixed(1) + '</td>' +
+        '<td style="padding:4px 8px;color:var(--muted);">' + (maxSpreadVal ? maxSpreadVal.toFixed(1) : '—') + '</td>' +
+        '<td style="padding:4px 8px;color:var(--accent);">' + priorityVal.toFixed(3) + '</td>' +
+        '<td style="padding:4px 8px;color:' + pctColor + ';">' + spreadPct.toFixed(0) + '%</td>' +
         '<td style="padding:4px 8px;">' + (c.tags || []).join(', ') + '</td></tr>';
     }).join('');
     tableWrap.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:0.82em;">' +
@@ -1443,135 +1412,130 @@ function renderScanner(scan) {
 function toggleProtections() {
   const body = document.getElementById('protections-body');
   const arrow = document.getElementById('protections-arrow');
-  if (body.style.display === 'none') { body.style.display = 'block'; arrow.textContent = '▼'; }
-  else { body.style.display = 'none'; arrow.textContent = '▶'; }
+  const isClosed = getComputedStyle(body).display === 'none';
+  body.style.display = isClosed ? 'block' : 'none';
+  arrow.textContent = isClosed ? '▼' : '▶';
 }
 
 function renderProtections(prot) {
   if (!prot) return;
   const badge = document.getElementById('protection-badge');
-  const alerts = prot.alerts || [];
-  if (prot.blocked) {
+  const cb = prot.circuit_breaker || {};
+  const isActive = cb.is_active || false;
+  const consLoss = cb.consecutive_losses || 0;
+  const maxLoss = cb.daily_max_loss !== undefined ? cb.daily_max_loss : -5.0;
+  const threshold = cb.consecutive_loss_threshold || 3;
+
+  // Badge
+  if (isActive) {
     badge.style.background = '#e74c3c'; badge.style.color = '#fff';
-    badge.textContent = '🔴 BLOQUÉ';
-  } else if (alerts.length > 0) {
-    badge.style.background = '#f39c12'; badge.style.color = '#000';
-    badge.textContent = alerts.length + ' alerte(s)';
+    badge.textContent = '🔴 PAUSE ACTIVE';
   } else {
     badge.style.background = '#00e676'; badge.style.color = '#000';
-    badge.textContent = '✅ OK';
+    badge.textContent = '✅ Trading Actif';
   }
-  // Spread & Slippage
-  const spreadDiv = document.getElementById('prot-spread');
-  const slip = prot.slippage_level || 'LOW';
-  const slipColor = slip === 'HIGH' ? '#e74c3c' : slip === 'MEDIUM' ? '#f39c12' : '#00e676';
-  spreadDiv.innerHTML = 'Spread spike: ' + (prot.spread_spike ? '<strong style="color:#e74c3c">⚠️ OUI</strong>' : '<strong style="color:#00e676">Non</strong>') +
-    '<br>Slippage: <strong style="color:' + slipColor + '">' + slip + '</strong>' +
-    '<br>Round number: ' + (prot.round_number ? '<strong style="color:#f39c12">⚠️ Proche</strong>' : '<strong>Non</strong>') +
-    '<br>Risk adj: <strong>' + ((prot.risk_adjustment || 1) * 100).toFixed(0) + '%</strong>';
-  // Ghost & News
-  const ghostDiv = document.getElementById('prot-ghost');
-  ghostDiv.innerHTML = 'Ghost candle: ' + (prot.ghost_candle ? '<strong style="color:#e74c3c">⚠️ Détectée</strong>' : '<strong style="color:#00e676">Non</strong>') +
-    '<br>News spike: ' + (prot.news_spike ? '<strong style="color:#e74c3c">⚠️ Actif</strong>' : '<strong style="color:#00e676">Non</strong>');
-  // Liquidity Sweep
-  const sweepDiv = document.getElementById('prot-sweep');
-  if (prot.liquidity_sweep) {
-    const dir = prot.sweep_direction || '?';
-    const dirColor = dir === 'BUY' ? '#00e676' : dir === 'SELL' ? '#e74c3c' : '#888';
-    sweepDiv.innerHTML = '<strong style="color:' + dirColor + '">💧 Sweep détecté → ' + dir + '</strong>' +
-      '<br><span style="opacity:0.7;">Les institutions ont balayé la liquidité</span>';
+
+  // État CB
+  const cbDiv = document.getElementById('prot-cb-state');
+  if (isActive) {
+    const reason = cb.pause_reason || '—';
+    const until = cb.pause_until ? cb.pause_until.replace('T', ' ').slice(0, 19) : '';
+    cbDiv.innerHTML = '<strong style="color:#e74c3c;">⛔ BLOQUÉ</strong><br>' +
+      '<span style="opacity:0.8;">' + reason + '</span>' +
+      (until ? '<br>Jusqu\'à: <strong>' + until + '</strong>' : '');
   } else {
-    sweepDiv.innerHTML = '<span style="color:var(--muted);">Pas de sweep récent</span>';
+    cbDiv.innerHTML = '<strong style="color:#00e676;">✅ Actif</strong><br>' +
+      '<span style="opacity:0.7;">Prêt à trader</span>';
   }
-  // Structure BOS/CHoCH
-  const structDiv = document.getElementById('prot-structure');
-  const trend = prot.structure_trend || 'undefined';
-  const trendColor = trend === 'bullish' ? '#00e676' : trend === 'bearish' ? '#e74c3c' : '#f39c12';
-  let structHtml = 'Tendance: <strong style="color:' + trendColor + '">' + trend + '</strong>';
-  if (prot.bos) structHtml += '<br><strong style="color:#00e676;">📈 BOS</strong> ' + (prot.bos_detail || '').slice(0, 80);
-  if (prot.choch) structHtml += '<br><strong style="color:#f39c12;">🔄 CHoCH</strong> ' + (prot.choch_detail || '').slice(0, 80);
-  if (!prot.bos && !prot.choch) structHtml += '<br><span style="opacity:0.7;">Pas de cassure de structure</span>';
-  structDiv.innerHTML = structHtml;
-  // Alerts list
+
+  // Pertes consécutives
+  const lossDiv = document.getElementById('prot-losses');
+  const lossColor = consLoss >= threshold ? '#e74c3c' : consLoss >= threshold - 1 ? '#f39c12' : '#00e676';
+  const lossBar = Math.min(100, Math.round((consLoss / threshold) * 100));
+  lossDiv.innerHTML = '<strong style="color:' + lossColor + '">' + consLoss + ' / ' + threshold + '</strong>' +
+    '<div style="width:100%;height:5px;background:var(--border);border-radius:3px;margin-top:4px;overflow:hidden;">' +
+      '<div style="width:' + lossBar + '%;height:100%;background:' + lossColor + ';border-radius:3px;"></div></div>';
+
+  // P&L journalier
+  const dailyDiv = document.getElementById('prot-daily');
+  const dailyPnl = prot.daily_pnl || 0;
+  const pnlColor = dailyPnl >= 0 ? '#00e676' : '#e74c3c';
+  dailyDiv.innerHTML = 'P&L: <strong style="color:' + pnlColor + '">' + (dailyPnl >= 0 ? '+' : '') + dailyPnl.toFixed(2) + '$</strong>' +
+    '<br>Seuil: <strong>' + maxLoss.toFixed(2) + '$</strong>';
+
+  // News pause
+  const newsDiv = document.getElementById('prot-news');
+  const newsPause = prot.news_pause || {};
+  if (newsPause.pause) {
+    newsDiv.innerHTML = '<strong style="color:#f39c12;">⚠️ PAUSE NEWS</strong><br>' +
+      '<span style="opacity:0.8;font-size:0.85em;">' + (newsPause.reason || '') + '</span>';
+  } else {
+    newsDiv.innerHTML = '<strong style="color:#00e676;">✅ Aucune news imminente</strong>';
+  }
+
+  // Alerts
   const alertsDiv = document.getElementById('prot-alerts');
-  if (alerts.length > 0) {
-    alertsDiv.innerHTML = alerts.map(a => '<div>' + a + '</div>').join('');
-  } else {
-    alertsDiv.innerHTML = '<span style="color:#00e676;">Aucune alerte — marché sain</span>';
-  }
+  const alerts = prot.alerts || [];
+  alertsDiv.innerHTML = alerts.length > 0
+    ? alerts.map(a => '<div style="color:#f39c12;">⚠️ ' + a + '</div>').join('')
+    : '<span style="color:#00e676;">Aucune alerte active</span>';
 }
 
-function showAgentTab(tab) {
-  ['analyste', 'risk', 'decideur', 'raw'].forEach(t => {
-    document.getElementById('agent-view-' + t).style.display = t === tab ? 'block' : 'none';
-    const btn = document.getElementById('tab-' + t);
-    if (btn) btn.className = t === tab ? 'btn' : 'btn secondary';
+function toggleAgentsStatus() {
+  const body = document.getElementById('agents-status-body');
+  const arrow = document.getElementById('agents-status-arrow');
+  const isClosed = getComputedStyle(body).display === 'none';
+  body.style.display = isClosed ? 'block' : 'none';
+  arrow.textContent = isClosed ? '▼' : '▶';
+}
+
+function initPanelsOpen() {
+  [
+    ['scanner-body', 'scanner-arrow'],
+    ['trending-body', 'trending-arrow'],
+    ['agents-status-body', 'agents-status-arrow'],
+    ['calendar-body', 'calendar-arrow'],
+    ['strategies-body', 'strategies-arrow'],
+    ['protections-body', 'protections-arrow'],
+  ].forEach(([bodyId, arrowId]) => {
+    const body = document.getElementById(bodyId);
+    const arrow = document.getElementById(arrowId);
+    if (body) body.style.display = 'block';
+    if (arrow) arrow.textContent = '▼';
   });
 }
 
-function formatAgentJson(obj) {
-  if (!obj || typeof obj !== 'object') return String(obj || '—');
-  return Object.entries(obj).map(([k, v]) => {
-    if (typeof v === 'object') v = JSON.stringify(v);
-    return k + ': ' + v;
-  }).join('\n');
-}
-
-function renderAiExchange(exchange) {
-  if (!exchange || !exchange.prompt) return;
-  document.getElementById('ai-ex-instrument').textContent = exchange.instrument || '—';
-  document.getElementById('ai-ex-model').textContent = exchange.model || '—';
-  const ts = exchange.timestamp || '';
-  document.getElementById('ai-ex-time').textContent = ts ? ts.replace('T', ' ').slice(0, 19) : '—';
-
-  // Raw data
-  document.getElementById('ai-ex-prompt').textContent = exchange.prompt || 'Aucun prompt.';
-  document.getElementById('ai-ex-raw-response').textContent = exchange.raw_response || '—';
-
-  // Multi-agent parsed views
-  const parsed = exchange.parsed_response;
-  if (parsed && typeof parsed === 'object') {
-    // Analyste
-    const a = parsed.analyste;
-    if (a) {
-      const dir = String(a.direction || 'NEUTRAL').toUpperCase();
-      const force = a.force || 0;
-      const dirColor = dir === 'BUY' || dir === 'LONG' ? 'var(--green)' : dir === 'SELL' || dir === 'SHORT' ? 'var(--red)' : 'var(--amber)';
-      document.getElementById('ai-agent-analyste').innerHTML =
-        '<strong style="color:' + dirColor + '">' + dir + '</strong> force=' + force + '/5' +
-        (a.setup ? '<br>Setup: ' + a.setup : '') +
-        (a.reasoning ? '<br>Raison: ' + a.reasoning : '');
-    } else {
-      document.getElementById('ai-agent-analyste').textContent = 'Pas encore exécuté';
-    }
-    // Risk Manager
-    const r = parsed.risk;
-    if (r) {
-      const approved = r.approved;
-      const riskScore = r.risk_score || '?';
-      document.getElementById('ai-agent-risk').innerHTML =
-        '<strong style="color:' + (approved ? 'var(--green)' : 'var(--red)') + '">' +
-        (approved ? '✅ APPROUVÉ' : '❌ BLOQUÉ') + '</strong> risque=' + riskScore + '/10' +
-        (r.reasoning ? '<br>Raison: ' + r.reasoning : '') +
-        (r.risk_notes ? '<br>Notes: ' + r.risk_notes : '');
-    } else {
-      document.getElementById('ai-agent-risk').textContent = 'Pipeline arrêté avant Risk Manager';
-    }
-    // Décideur
-    const d = parsed.decideur;
-    if (d) {
-      const dec = String(d.decision || 'WAIT').toUpperCase();
-      const conf = Math.round((parseFloat(d.confidence || 0)) * 100);
-      const decColor = dec === 'BUY' ? 'var(--green)' : dec === 'SELL' ? 'var(--red)' : 'var(--amber)';
-      document.getElementById('ai-agent-decideur').innerHTML =
-        '<strong style="color:' + decColor + '">' + dec + '</strong> confiance=' + conf + '%' +
-        (d.reasoning ? '<br>Raison: ' + d.reasoning : '') +
-        (d.sl ? '<br>SL: ' + d.sl : '') + (d.tp ? ' | TP: ' + d.tp : '');
-    } else {
-      document.getElementById('ai-agent-decideur').textContent = 'Pipeline arrêté avant Décideur';
-    }
+function renderAgentsStatus(agents) {
+  const badge = document.getElementById('agents-status-badge');
+  const list = document.getElementById('agents-status-list');
+  if (!agents || agents.length === 0) {
+    badge.textContent = 'Aucun agent'; badge.style.background = 'var(--muted)';
+    list.innerHTML = '<span style="color:var(--muted);">Aucune donnée de heartbeat</span>';
+    return;
   }
+  const running = agents.filter(a => a.status === 'running').length;
+  badge.textContent = running + '/' + agents.length + ' actifs';
+  badge.style.background = running === agents.length ? 'var(--green)' : running > 0 ? '#f39c12' : '#e74c3c';
+  badge.style.color = running === agents.length ? '#000' : '#fff';
+
+  list.innerHTML = agents.map(a => {
+    const statusColor = a.status === 'running' ? '#00e676' : a.status === 'stale' ? '#f39c12' : '#e74c3c';
+    const statusIcon = a.status === 'running' ? '🟢' : a.status === 'stale' ? '🟡' : '🔴';
+    const extra = a.extra && Object.keys(a.extra).length
+      ? Object.entries(a.extra).map(([k, v]) => k + '=' + v).join(' · ') : '';
+    const ts = a.last_seen ? a.last_seen.replace('T', ' ').slice(0, 19) : '—';
+    return '<div style="display:flex;align-items:center;gap:10px;padding:7px 10px;background:rgba(255,255,255,0.03);border-radius:8px;">' +
+      '<span style="font-size:1em;">' + statusIcon + '</span>' +
+      '<div style="flex:1;">' +
+        '<strong style="color:var(--text);">' + (a.name || a.agent) + '</strong>' +
+        (extra ? '<span style="color:var(--muted);font-size:0.8em;margin-left:8px;">' + extra + '</span>' : '') +
+        '<div style="color:var(--muted);font-size:0.78em;margin-top:2px;">Vu: ' + ts + '</div>' +
+      '</div>' +
+      '<span style="color:' + statusColor + ';font-size:0.8em;font-weight:600;">' + (a.status || '—').toUpperCase() + '</span>' +
+    '</div>';
+  }).join('');
 }
+
 
 async function testAI() {
   if (aiBusy) return;
@@ -1589,7 +1553,6 @@ async function testAI() {
       const d = data.result?.decision || {};
       lastAiPayload = data.result || null;
       renderAiDecision(data.result || {});
-      if (data.result?.last_ai_exchange) renderAiExchange(data.result.last_ai_exchange);
       const liveMode = document.getElementById('setting-allow-trade').value === 'true'
         ? 'mode réel démo actif'
         : 'mode aperçu actif';
@@ -1663,15 +1626,15 @@ async function fetchStatus() {
     // Features bar
     const fb = document.getElementById('features-bar');
     if (fb) {
+      const agentsList = data.agents || [];
+      const agentsOk = agentsList.length > 0 && agentsList.filter(a => a.status === 'running').length === agentsList.length;
+      const cbOk = !(data.market_protections?.circuit_breaker?.is_active);
       const features = [
-        {label: '🔍 Smart Scan', on: true},
+        {label: '🔍 Smart Scan', on: !!(data.smart_scan && (data.smart_scan.candidates || []).length >= 0)},
         {label: '📱 Telegram', on: String(data.settings?.telegram_enabled ?? true) === 'true'},
-        {label: '🛡️ Protections', on: true},
+        {label: '🤖 Agents (' + agentsList.filter(a => a.status === 'running').length + '/' + agentsList.length + ')', on: agentsOk},
+        {label: '🛡️ Circuit Breaker', on: cbOk},
         {label: '📰 Calendrier', on: true},
-        {label: '🎯 Stratégies Pro', on: true},
-        {label: '🧠 Multi-Agents', on: true},
-        {label: '💧 Liquidity Sweep', on: !!data.market_protections?.liquidity_sweep},
-        {label: '📐 BOS/CHoCH', on: !!(data.market_protections?.bos || data.market_protections?.choch)},
         {label: allowTrade ? '✅ Trading Actif' : '⏸️ Paper Mode', on: allowTrade},
       ];
       fb.innerHTML = features.map(f =>
@@ -1683,12 +1646,12 @@ async function fetchStatus() {
     }
 
     renderAiChart(data);
-    if (data.last_ai_exchange && data.last_ai_exchange.prompt) renderAiExchange(data.last_ai_exchange);
     if (data.economic_calendar) renderCalendar(data.economic_calendar);
     if (data.pro_strategies) renderStrategies(data.pro_strategies);
     if (data.market_protections) renderProtections(data.market_protections);
     if (data.smart_scan) renderScanner(data.smart_scan);
     if (data.trending_pairs) renderTrending(data.trending_pairs);
+    if (data.agents) renderAgentsStatus(data.agents);
 
     // Live snapshot rotation: show chart even before first AI call
     if (data.live_snapshot && data.live_snapshot.closes) {
@@ -1824,6 +1787,16 @@ async function fetchStatus() {
 
   } catch(e) {
     console.error('Fetch error:', e);
+    const badge = document.getElementById('status-badge');
+    const statusText = document.getElementById('status-text');
+    badge.className = 'closed';
+    statusText.textContent = 'BACKEND INDISPONIBLE';
+    const logEl = document.getElementById('log-container');
+    if (logEl) {
+      logEl.innerHTML = '<div style="color:var(--red);font-family:var(--mono);font-size:12px;padding:20px 0;text-align:center">' +
+        'Impossible de joindre /api/status. Vérifie que launch.py tourne.' +
+        '</div>';
+    }
   }
 }
 
@@ -1871,6 +1844,7 @@ function initAutoSave() {
 }
 
 fetchStatus().finally(() => {
+  initPanelsOpen();
   if (!initialAiWarmupDone) {
     setTimeout(() => testAI(), 700);
   }
@@ -1903,30 +1877,181 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith('/api/status'):
             try:
                 from urllib.parse import urlparse, parse_qs
+                from datetime import datetime, timezone
                 from mt5_bridge import build_broker
                 from learning_store import AgentMemory
                 from circuit_breaker import CircuitBreaker
+                from runtime_db import RuntimeStore
+                from economic_calendar import EconomicCalendar
+                import settings as cfg
+
                 qs = parse_qs(urlparse(self.path).query)
                 focus = (qs.get('focus', [''])[0] or '').strip()
+
                 broker = build_broker()
                 memory = AgentMemory()
                 cb = CircuitBreaker()
-                account = broker.get_account_summary()
+                store = RuntimeStore()
+                calendar = EconomicCalendar()
+
+                # Calendar pause check
+                try:
+                    cal_pause = calendar.should_pause_trading("EURUSDm")
+                    cal_status = {
+                        "news_pause": cal_pause,
+                        "upcoming": [],
+                    }
+                except Exception:
+                    cal_status = {}
                 positions = broker.get_open_positions()
-                recent_trades = memory.get_recent_trades(10)
+                recent_trades = memory.get_recent_trades(20)
                 cb_status = cb.get_status()
+                # Normalize circuit breaker status for frontend
+                cb_status = {
+                  "is_active": cb_status.get("is_paused", False),
+                  "pause_reason": cb_status.get("reason", ""),
+                  "pause_until": cb_status.get("pause_until"),
+                  "consecutive_losses": cb_status.get("consecutive_losses", cb.consecutive_losses),
+                  "daily_max_loss": cb.daily_max_loss,
+                  "consecutive_loss_threshold": cb.consecutive_loss_threshold,
+                  "remaining_minutes": cb_status.get("remaining_minutes", 0),
+                }
+                runtime_settings = store.get_settings()
+
+                # P&L stats from memory
+                daily_pnl = memory.get_daily_pnl()
+                win_rate = memory.get_win_rate()  # already in %
+                all_trades = memory.get_recent_trades(1000)
+                total_trades = len(all_trades)
+                total_pnl = sum(t.get("pnl", 0) or 0 for t in all_trades if t.get("status") == "closed")
+                llm_calls_today = memory.get_llm_calls_today()
+
+                # Session log from audit_logger
+                try:
+                    from audit_logger import get_audit_logger
+                    session_log = get_audit_logger().get_session_log(50)
+                    llm_calls_today = get_audit_logger().get_daily_stats().get("llm_calls", 0)
+                except Exception:
+                    session_log = []
+                    llm_calls_today = memory.get_llm_calls_today()
+
+                # Market open check (weekday + hour)
+                now = datetime.now(timezone.utc)
+                weekday = now.weekday()  # 0=Mon, 6=Sun
+                hour = now.hour
+                market_open = weekday < 5 and not (weekday == 4 and hour >= 22) and not (weekday == 6 and hour < 22)
+                market_status = {"reason": "MARCHÉ OUVERT" if market_open else "MARCHÉ FERMÉ (week-end)"}
+
+                account = broker.get_account_summary()
+                pref_raw = runtime_settings.get("preferred_symbols", "")
+                if pref_raw:
+                    raw_str = str(pref_raw).strip().strip("[]").replace("'", "").replace('"', "")
+                    active_symbols = [s.strip() for s in raw_str.split(",") if s.strip()]
+                else:
+                    active_symbols = list(getattr(cfg, "INSTRUMENTS", []))
+
+                # Live snapshot for first symbol
+                live_snapshot = {}
+                try:
+                    sym = focus or (active_symbols[0] if active_symbols else "EURUSDm")
+                    candles = broker.get_candles(sym, "H1", 60)
+                    if len(candles) >= 2:
+                        closes = [float(c["close"]) for c in candles[-30:]]
+                        last = candles[-1]
+                        prev = candles[-2]
+                        price_change_pct = ((last["close"] - prev["close"]) / prev["close"] * 100) if prev["close"] else 0
+                        live_snapshot = {
+                            "instrument": sym,
+                            "closes": closes,
+                            "price": last["close"],
+                            "price_change_pct": round(price_change_pct, 4),
+                            "spread": broker.get_spread_pips(sym) if hasattr(broker, "get_spread_pips") else 0,
+                        }
+                except Exception:
+                    pass
+
+                # Best patterns from memory
+                best_patterns = memory.get_best_patterns() if hasattr(memory, "get_best_patterns") else []
+
+                # Scan results from AnalystAgent
+                import time as _time
+                scan_file = Path("data/scan_results.json")
+                smart_scan = {"candidates": [], "rejected": []}
+                trending_pairs = []
+                scan_data = {}
+                if scan_file.exists():
+                    try:
+                        scan_data = json.loads(scan_file.read_text(encoding="utf-8"))
+                        smart_scan = {
+                            "candidates": scan_data.get("candidates", []),
+                            "rejected": scan_data.get("rejected", []),
+                        }
+                        trending_pairs = scan_data.get("trending", [])
+                    except Exception:
+                        pass
+
+                # Agents heartbeat
+                hb_file = Path("data/agents_heartbeat.json")
+                agents_status = []
+                if hb_file.exists():
+                    try:
+                        hb_data = json.loads(hb_file.read_text(encoding="utf-8"))
+                        now_ts = datetime.now(timezone.utc).timestamp()
+                        for agent_name, info in hb_data.items():
+                            last_seen_str = info.get("last_seen", "")
+                            try:
+                                last_ts = datetime.fromisoformat(last_seen_str).timestamp()
+                                age_sec = now_ts - last_ts
+                                status = "running" if age_sec < 120 else "stale"
+                            except Exception:
+                                status = "unknown"
+                            agents_status.append({"name": agent_name, "status": status, "last_seen": last_seen_str})
+                    except Exception:
+                        pass
+                if not agents_status:
+                    for name in ["AnalystAgent", "RiskAgent", "DecisionAgent", "ExecutionAgent", "GuardianAgent"]:
+                        agents_status.append({"name": name, "status": "stopped"})
+
                 status = {
+                    # Market state
+                    "market_open": market_open,
+                    "market_status": market_status,
+                    # Account
                     "account": account,
                     "open_positions": positions,
                     "recent_trades": recent_trades,
+                    # Stats
+                    "daily_pnl": daily_pnl,
+                    "total_pnl": total_pnl,
+                    "win_rate": win_rate,
+                    "total_trades": total_trades,
+                    # Config
+                    "settings": runtime_settings,
+                    "ai_provider": f"Ollama {runtime_settings.get('local_llm_model', 'qwen2.5:3b')}",
+                    "active_symbols": active_symbols,
+                    "llm_calls_today": llm_calls_today,
+                    # Live data
+                    "live_snapshot": live_snapshot,
+                    "best_patterns": best_patterns,
+                    "session_log": session_log,
+                    # Modules
+                    "economic_calendar": cal_status,
                     "circuit_breaker": cb_status,
-                    "agents": [
-                        {"name": "AnalystAgent", "status": "running"},
-                        {"name": "RiskAgent", "status": "running"},
-                        {"name": "DecisionAgent", "status": "running"},
-                        {"name": "ExecutionAgent", "status": "running"},
-                        {"name": "GuardianAgent", "status": "running"},
-                    ],
+                    "smart_scan": smart_scan,
+                    "trending_pairs": trending_pairs,
+                    "market_protections": {
+                        "circuit_breaker": cb_status,
+                        "daily_pnl": daily_pnl,
+                        "news_pause": cal_status.get("news_pause", {"pause": False, "reason": ""}),
+                        "alerts": cb_status.get("alerts", []),
+                    },
+                    "pro_strategies": {
+                        "candidates": smart_scan.get("candidates", []),
+                        "session": scan_data.get("session", "—"),
+                        "timestamp": scan_data.get("timestamp", ""),
+                    },
+                    # Agents status
+                    "agents": agents_status,
                 }
                 if focus:
                     status["focus"] = focus
@@ -1986,8 +2111,8 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 from telegram_notifier import TelegramNotifier
                 tg = TelegramNotifier()
-                ok = tg.test_connection()
-                self._send_json({"ok": ok, "message": "Message test envoyé !" if ok else "Échec de l'envoi"})
+                result = tg.test_connection()
+                self._send_json(result)
             except Exception as e:
                 self._send_json({"ok": False, "error": str(e)}, status=500)
         else:

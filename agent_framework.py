@@ -7,8 +7,11 @@ import asyncio
 import json
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, asdict
+
+_HB_FILE = Path("data/agents_heartbeat.json")
 
 
 @dataclass
@@ -130,7 +133,28 @@ class Agent(ABC):
     async def wait_for_message(self, timeout: float = 1.0) -> Optional[Message]:
         """Attend un message."""
         return await self.bus.receive(self.name, timeout)
-    
+
+    def write_heartbeat(self, extra: Optional[Dict] = None):
+        """Met à jour le heartbeat de cet agent dans data/agents_heartbeat.json."""
+        try:
+            _HB_FILE.parent.mkdir(exist_ok=True)
+            hb = {}
+            if _HB_FILE.exists():
+                try:
+                    hb = json.loads(_HB_FILE.read_text(encoding="utf-8"))
+                except Exception:
+                    hb = {}
+            entry = {
+                "status": "running",
+                "last_seen": datetime.now(timezone.utc).isoformat(),
+            }
+            if extra:
+                entry.update(extra)
+            hb[self.name] = entry
+            _HB_FILE.write_text(json.dumps(hb, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+
     def log(self, level: str, message: str):
         """Log standardisé."""
         timestamp = datetime.now(timezone.utc).isoformat()

@@ -49,6 +49,7 @@ class ExecutionAgent(Agent):
             
             # Surveiller les positions existantes
             await self._check_positions()
+            self.write_heartbeat()
             await asyncio.sleep(1)
     
     async def _execute_trade(self, decision: Dict[str, Any]):

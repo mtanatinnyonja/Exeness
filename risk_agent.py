@@ -32,7 +32,8 @@ class RiskAgent(Agent):
             
             if message and message.event_type == "signal":
                 await self._evaluate_risk(message.payload)
-            
+
+            self.write_heartbeat()
             await asyncio.sleep(0.1)
     
     async def _evaluate_risk(self, signal_data: Dict[str, Any]):

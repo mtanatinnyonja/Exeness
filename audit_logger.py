@@ -150,6 +150,35 @@ class AuditLogger:
             pass
         return errors
 
+    def get_session_log(self, max_lines: int = 50) -> List[str]:
+        """Retourne les dernières entrées du journal au format lisible pour le dashboard."""
+        lines = []
+        try:
+            with open(self.audit_file, "r", encoding="utf-8") as f:
+                records = [json.loads(l) for l in f if l.strip()]
+            for r in records[-max_lines:]:
+                ts = r.get("timestamp", "")[:19].replace("T", " ")
+                time_str = ts[11:19] if len(ts) >= 19 else ""
+                etype = r.get("event_type", "")
+                if etype == "trade_executed":
+                    lines.append(f"[{time_str}] 📈 {r.get('direction','?')} {r.get('instrument','?')} @ {r.get('entry_price',0):.5f}")
+                elif etype == "position_closed":
+                    pnl = r.get("pnl", 0)
+                    icon = "✅" if pnl >= 0 else "❌"
+                    lines.append(f"[{time_str}] {icon} Fermé {r.get('instrument','?')} P&L: {pnl:+.2f}")
+                elif etype == "agent_decision":
+                    dec = r.get("decision", {})
+                    lines.append(f"[{time_str}] 🤖 {r.get('agent','?')} → {r.get('instrument','?')}: {dec.get('decision', dec.get('approved','?'))}")
+                elif etype.startswith("risk_"):
+                    lines.append(f"[{time_str}] ⚠️ Risk: {r.get('reason','')[:60]}")
+                elif etype == "error":
+                    lines.append(f"[{time_str}] ❌ {r.get('module','?')}: {r.get('error_message','')[:60]}")
+                elif etype == "llm_call":
+                    lines.append(f"[{time_str}] 🔔 LLM {r.get('agent','?')} ({r.get('response_time_sec',0):.1f}s)")
+        except Exception:
+            pass
+        return lines
+
     def get_daily_stats(self) -> Dict:
         """Retourne les stats du jour (trades, erreurs, LLM calls)."""
         trades = self.get_session_trades()
