@@ -1,119 +1,107 @@
-# 🚀 EXENESS — SYSTÈME MULTI-AGENT AUTONOME
+# 🚀 EXENESS — BOT TRADING MULTI-AGENT AUTONOME
 
-**Nettoyé. Fiable. Production-ready.**
+**5 agents IA. 1 dashboard. Connexion MT5 directe.**
 
-## ⚡ Démarrage (30 secondes)
+---
+
+## ⚡ Démarrage
 
 ```bash
-python start_trading_agents.py
+python launch.py
 ```
 
-**Voilà.** 5 agents tournent en parallèle.
-
+Dashboard: **http://localhost:8765**  
 Arrêt: `Ctrl+C`
 
 ---
 
-## 📊 Qu'est-ce que c'est?
+## 📊 Architecture
 
-5 agents **autonomes** qui communiquent via un **bus de messages asynchrone**:
+5 agents autonomes communiquant via un **bus de messages asynchrone**:
 
-1. **AnalystAgent** → Scan marché, découvre signaux
-2. **RiskAgent** → Évalue risques, approuve/bloque
-3. **DecisionAgent** → Synthétise, décide BUY/SELL
-4. **ExecutionAgent** → Exécute ordres, gère positions
-5. **GuardianAgent** → Surveille positions, détecte arrêts
+| Agent | Rôle |
+|-------|------|
+| **AnalystAgent** | Scan marché, génère signaux (score 1-5) |
+| **RiskAgent** | Évalue risques, approuve ou bloque |
+| **DecisionAgent** | Décision finale BUY/SELL après délibération |
+| **ExecutionAgent** | Envoie ordres à MT5, gère positions |
+| **GuardianAgent** | Surveille positions ouvertes, détecte SL/TP |
 
-**Pas d'orchestrateur centralisé.** Chacun tourne indépendamment.
-
----
-
-## ✅ Validation rapide
-
-```bash
-python checklist_system.py       # ✅ PASS = prêt
-python test_agents_framework.py  # ✅ Test communication
-python test_multiagent_flow.py   # ✅ Test flux complet
-```
+Les agents ne s'appellent pas directement — ils s'envoient des messages et chacun décide.
 
 ---
 
-## 📚 Documentation
+## 🛡️ Garde-fous intégrés
 
-- **[ARCHITECTURE_MULTIAGENT.py](ARCHITECTURE_MULTIAGENT.py)** — Comment ça marche
-- **[MIGRATION_GUIDE.py](MIGRATION_GUIDE.py)** — Guide détaillé
-- **[FILES_INVENTORY.py](FILES_INVENTORY.py)** — Fichiers et rôles
-
----
-
-## 📁 Ce qui reste (après nettoyage)
-
-| Catégorie | Fichiers | Status |
-|-----------|----------|--------|
-| 🤖 Framework + Agents | 8 | ✅ Essentiels |
-| 📊 Analyse & Signaux | 3 | ✅ Core |
-| 🛡️ Protection | 4 | ✅ Core |
-| 🔧 Auxiliaires | 8 | ✅ Support |
-| 🧪 Tests | 4 | ✅ Validation |
-| 📚 Documentation | 5 | ✅ Référence |
-| ⚡ Optionnels | 3 | ⭕ Web/Notif |
-| ⚙️ Config | 1 | ✅ Setup |
-
-**Total: 39 fichiers utiles (0% code mort)**
-
----
-
-## 🎯 Principaux fichiers
-
-| Fichier | Rôle |
-|---------|------|
-| `start_trading_agents.py` | **Point d'entrée** |
-| `agent_framework.py` | Base Agent + MessageBus |
-| `*_agent.py` (5 fichiers) | Les 5 agents autonomes |
-| `signal_engine.py` | Détection signaux |
-| `market_protection.py` | Guards (risque) |
-| `circuit_breaker.py` | Auto-pause |
-| `audit_logger.py` | Logging complet |
-| `settings.py` | Configuration |
-
----
-
-## 🧹 Ce qui a été supprimé
-
-- ❌ Orchestrateur centralisé (code mort)
-- ❌ Vieux tests (agent_core, test_core, etc.)
-- ❌ Vieux entry points (main.py, run_bot.py)
-- ❌ Vieux scripts (start_local.ps1)
-- ❌ Vieux prompts (agent_communication.py)
-- ❌ Vieux docs (IMPROVEMENTS.md, VERSION_SUMMARY.md)
-
-**Total supprimé: 12 fichiers (~1,500 lignes)**
+- **Warmup 120s** au démarrage (aucun trade pendant les 2 premières minutes)
+- **Double confirmation** : un signal doit apparaître 2x en 90s avant passage en décision
+- **Confiance minimum 55%** — les signaux faibles sont ignorés
+- **1 position max** simultanée (hard guard)
+- **Circuit Breaker** : pause auto si pertes excessives ou erreurs MT5 répétées
+- **Anti-spam news** : blocage configurable avant/après événements économiques
+- **Spread guard** : rejet si spread trop élevé (XAU/BTC: 30p, autres: 5p)
 
 ---
 
 ## 🔧 Configuration
 
-Modifier `settings.py`:
-```python
-INSTRUMENTS = ["EURUSDm", "XAUUSDm", "BTCUSDm"]
-PRIMARY_TIMEFRAME = "H1"
-MAX_RISK_PER_TRADE = 0.02
-```
+Tout se configure depuis le **dashboard** (`/` → onglet Paramètres) :
 
-Aucun changement nécessaire pour démarrer.
+- Paires préférées, risque par trade, objectif/limite journalière
+- Activation du trading réel (`allow_trade_execution`)
+- Token + Chat ID Telegram
+- Paramètres LLM (Ollama, optionnel)
+
+Pour trader en réel avec MT5 :
+1. Activer **"Algo Trading"** dans le terminal MT5
+2. Mettre `allow_trade_execution` à `true` dans les paramètres
 
 ---
 
-## 📊 Monitoring en temps réel
+## 📁 Fichiers principaux
 
-Les logs affichent toutes les actions:
+| Fichier | Rôle |
+|---------|------|
+| `launch.py` | **Point d'entrée unique** |
+| `agent_framework.py` | Classe de base Agent + MessageBus |
+| `analyst_agent.py` | Scanner marché |
+| `risk_agent.py` | Évaluateur de risque |
+| `decision_agent.py` | Décision finale |
+| `execution_agent.py` | Exécution MT5 |
+| `guardian_agent.py` | Surveillance positions |
+| `control_panel.py` | Dashboard web + API HTTP |
+| `mt5_bridge.py` | Connexion MetaTrader 5 |
+| `signal_engine.py` | Calcul des signaux techniques |
+| `circuit_breaker.py` | Protection auto-pause |
+| `market_protection.py` | Guards (news, spread, etc.) |
+| `telegram_notifier.py` | Notifications Telegram |
+| `audit_logger.py` | Logs JSONL horodatés |
+| `runtime_db.py` | Persistance SQLite settings |
+| `settings.py` | Constantes de configuration |
+
+---
+
+## 📱 Telegram
+
+Configurable directement depuis le dashboard (Paramètres → Telegram) :
+- Activer/désactiver les notifications
+- Saisir le Bot Token et le Chat ID
+- Bouton **"Tester Telegram"** pour valider la connexion
+
+Événements notifiés : trade ouvert, trade fermé, limite de perte atteinte, résumé journalier, erreurs critiques.
+
+---
+
+## 🗄️ Données
 
 ```
-[2026-05-02T11:18:06] INFO | AnalystAgent   | 📊 EURUSD: Signal BUY (4/5)
-[2026-05-02T11:18:06] INFO | RiskAgent      | ✅ EURUSD: APPROUVÉ
-[2026-05-02T11:18:07] INFO | DecisionAgent  | 🎯 EURUSD: DÉCISION BUY
-[2026-05-02T11:18:07] INFO | ExecutionAgent | 🚀 EURUSD: BUY exécuté
-[2026-05-02T11:18:07] INFO | GuardianAgent  | 👁️  EURUSD: EN SURVEILLANCE
+data/
+  local_runtime.db        ← Settings persistants (SQLite)
+  scan_results.json       ← Résultats scanner (mis à jour toutes les 30s)
+  agents_heartbeat.json   ← Statut des 5 agents en temps réel
+  agent_memory.json       ← Mémoire d'apprentissage
+  trades_history.json     ← Historique des trades
+  audit/audit_YYYY-MM-DD.jsonl  ← Logs complets
 ```
 
 ---
