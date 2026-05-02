@@ -122,6 +122,9 @@ class PaperBroker:
     def close_position(self, instrument: str) -> Optional[float]:
         return 0.0
 
+    def modify_sl(self, instrument: str, new_sl: float) -> bool:
+        return False
+
     def list_visible_symbols(self) -> List[str]:
         return []
 
@@ -220,6 +223,20 @@ class MT5Broker:
     def _ensure_ready(self):
         if not self.connected or self.mt5 is None:
             raise RuntimeError(self.last_error or "MT5 non connecté")
+
+    def _describe_trade_retcode(self, code) -> str:
+        descriptions = {
+            10017: "trade disabled (broker/account)",
+            10018: "market closed",
+            10019: "not enough money",
+            10024: "too many requests",
+            10027: "client disables auto trading",
+            10031: "no connection",
+        }
+        try:
+            return descriptions.get(int(code), "unknown trade retcode")
+        except Exception:
+            return "unknown trade retcode"
 
     def _resolve_symbol(self, instrument: str) -> str:
         self._ensure_ready()
@@ -516,7 +533,8 @@ class MT5Broker:
         result = self.mt5.order_send(request)
         if result is None or result.retcode not in {self.mt5.TRADE_RETCODE_DONE, self.mt5.TRADE_RETCODE_DONE_PARTIAL}:
             err = self.mt5.last_error() if result is None else result.retcode
-            raise RuntimeError(f"order_send échoué: {err}")
+            desc = self._describe_trade_retcode(err)
+            raise RuntimeError(f"order_send échoué: {err} ({desc})")
 
         order_id = getattr(result, "order", None) or getattr(result, "deal", None)
         # Retrieve the position ticket (often == order, but not always)
@@ -574,9 +592,16 @@ class MT5Broker:
             return False
         return True
 
-    def close_position(self, instrument: str) -> Optional[float]:
+    def modify_sl(self, instrument: str, new_sl: float) -> bool:
+        """Modifie le SL de la première position ouverte sur l'instrument."""
         self._ensure_ready()
         symbol = self._resolve_symbol(instrument)
+        positions = self.mt5.positions_get(symbol=symbol) or []
+        if not positions:
+            return False
+        return self.modify_position(int(getattr(positions[0], "ticket", 0)), new_sl=new_sl)
+
+    def close_position(self, instrument: str) -> Optional[float]:
         positions = self.mt5.positions_get(symbol=symbol) or []
         if not positions:
             return 0.0
@@ -606,7 +631,8 @@ class MT5Broker:
             result = self.mt5.order_send(request)
             if result is None or result.retcode not in {self.mt5.TRADE_RETCODE_DONE, self.mt5.TRADE_RETCODE_DONE_PARTIAL}:
                 err = self.mt5.last_error() if result is None else result.retcode
-                raise RuntimeError(f"close_position échoué: {err}")
+                desc = self._describe_trade_retcode(err)
+                raise RuntimeError(f"close_position échoué: {err} ({desc})")
 
         return total_profit
 

@@ -97,7 +97,57 @@ def calculate_atr(candles: List[Dict], period: int = ATR_PERIOD) -> float:
     return atr
 
 
-def calculate_macd(closes: List[float]) -> Tuple[float, float]:
+def calculate_adx(candles: List[Dict], period: int = 14) -> float:
+    """
+    Average Directional Index (ADX) méthode Wilder.
+    > 25 = tendance forte, < 20 = pas de tendance claire.
+    """
+    if len(candles) < period * 2 + 1:
+        return 0.0
+
+    plus_dms, minus_dms, trs = [], [], []
+    for i in range(1, len(candles)):
+        h, l, ph, pl, pc = (
+            candles[i]["high"], candles[i]["low"],
+            candles[i - 1]["high"], candles[i - 1]["low"],
+            candles[i - 1]["close"],
+        )
+        plus_dm = max(h - ph, 0) if (h - ph) > (pl - l) else 0
+        minus_dm = max(pl - l, 0) if (pl - l) > (h - ph) else 0
+        tr = max(h - l, abs(h - pc), abs(l - pc))
+        plus_dms.append(plus_dm)
+        minus_dms.append(minus_dm)
+        trs.append(tr)
+
+    # Wilder smoothing
+    def _smooth(lst: List[float], p: int) -> List[float]:
+        r = [sum(lst[:p])]
+        for v in lst[p:]:
+            r.append(r[-1] - r[-1] / p + v)
+        return r
+
+    atr_s = _smooth(trs, period)
+    plus_s = _smooth(plus_dms, period)
+    minus_s = _smooth(minus_dms, period)
+
+    dx_list = []
+    for a, p, m in zip(atr_s, plus_s, minus_s):
+        if a == 0:
+            continue
+        pdi = 100 * p / a
+        mdi = 100 * m / a
+        dx_list.append(100 * abs(pdi - mdi) / (pdi + mdi) if (pdi + mdi) else 0)
+
+    if not dx_list:
+        return 0.0
+    # Wilder smooth DX into ADX
+    adx = sum(dx_list[:period]) / period
+    for dx in dx_list[period:]:
+        adx = (adx * (period - 1) + dx) / period
+    return round(adx, 2)
+
+
+
     """
     MACD (12, 26, 9) avec signal EMA(9) correct sur la série MACD.
     Nécessite au moins 26 + 9 - 1 = 34 valeurs.
@@ -460,6 +510,7 @@ def calculate_signal_score(candles: List[Dict], instrument: str = "") -> Dict:
     bb_upper, bb_mid, bb_lower = calculate_bollinger(closes)
     atr = calculate_atr(candles)
     macd, macd_signal = calculate_macd(closes)
+    adx = calculate_adx(candles)
     candle_pattern = detect_candle_pattern(candles)
 
     current_price = closes[-1]
@@ -498,6 +549,7 @@ def calculate_signal_score(candles: List[Dict], instrument: str = "") -> Dict:
         "atr_pips": atr_pips,
         "macd": round(macd, 6),
         "macd_signal": round(macd_signal, 6),
+        "adx": round(adx, 2),
         "candle_pattern": candle_pattern,
         "price": round(current_price, 5),
         "momentum_5": round(momentum_5, 4),
@@ -566,6 +618,22 @@ def calculate_signal_score(candles: List[Dict], instrument: str = "") -> Dict:
         elif regime == "trend_bearish":
             bearish_signals += 0.8
             details["trend_signal"] = "trend strength bearish"
+
+    # --- ADX : filtre qualité tendance ---
+    if adx >= 25:
+        # Tendance forte → boost la direction dominante
+        if regime == "trend_bullish":
+            bullish_signals += 1.0
+        elif regime == "trend_bearish":
+            bearish_signals += 1.0
+        details["adx_signal"] = f"adx={adx:.1f} tendance forte → boost"
+    elif adx < 18:
+        # Marché plat → pénaliser tous les signaux directionnels
+        bullish_signals *= 0.6
+        bearish_signals *= 0.6
+        details["adx_signal"] = f"adx={adx:.1f} range/flat → signaux réduits"
+    else:
+        details["adx_signal"] = f"adx={adx:.1f} tendance modérée"
 
     # --- Breakout ---
     if breakout_up:
