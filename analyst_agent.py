@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 from agent_framework import Agent, get_message_bus
 from mt5_bridge import build_broker
-from signal_engine import calculate_signal_score
+from signal_engine import calculate_signal_score, calculate_mtf_signal
 from smart_strategies import build_strategies_context, get_session_score
 from market_context import analyze_market_context
 from learning_store import AgentMemory
@@ -34,6 +34,7 @@ class AnalystAgent(Agent):
         self._instruments_override = instruments  # si passé manuellement
         self.cycle_count = 0
         self.last_analysis = {}  # instrument -> timestamp dernière analyse
+        self.min_broadcast_score = 3
 
     def _get_instruments(self) -> List[str]:
         """Lit les paires depuis les paramètres du dashboard (preferred_symbols)."""
@@ -93,11 +94,13 @@ class AnalystAgent(Agent):
             candles_h1 = self.broker.get_candles(instrument, PRIMARY_TIMEFRAME, 100)
             if len(candles_h1) < 20:
                 return {"symbol": instrument, "reason": "not_enough_data"}
+
+            candles_d1 = self.broker.get_candles(instrument, "D1", 100)
             
             candles_m15 = self.broker.get_candles(instrument, CONFIRM_TIMEFRAME, 60)
             
             # Calcul du signal
-            signal = calculate_signal_score(candles_h1, instrument)
+            signal = calculate_mtf_signal(candles_h1, candles_d1, instrument)
             signal_confirm = None
             if len(candles_m15) >= 20:
                 signal_confirm = calculate_signal_score(candles_m15, instrument)
@@ -125,15 +128,23 @@ class AnalystAgent(Agent):
                 "scanned_at": datetime.now(timezone.utc).isoformat(),
             }
 
-            # Envoyer le signal si directionnel
-            if signal.get("direction") in ("BUY", "SELL"):
+            # Envoyer le signal seulement s'il est directionnel et suffisamment robuste.
+            direction = signal.get("direction")
+            score = int(signal.get("score", 0) or 0)
+            confirm_ok = True
+            if signal_confirm and isinstance(signal_confirm, dict):
+                confirm_dir = signal_confirm.get("direction")
+                confirm_score = int(signal_confirm.get("score", 0) or 0)
+                confirm_ok = confirm_dir == direction and confirm_score >= max(2, score - 1)
+
+            if direction in ("BUY", "SELL") and score >= self.min_broadcast_score and confirm_ok:
                 await self.send_message(
                     recipient="*",  # Broadcast
                     event_type="signal",
                     payload={
                         "instrument": instrument,
-                        "direction": signal["direction"],
-                        "score": signal["score"],
+                        "direction": direction,
+                        "score": score,
                         "details": signal.get("details", {}),
                         "market_context": market_context,
                         "session": session,
@@ -142,7 +153,10 @@ class AnalystAgent(Agent):
                         "spread": spread,
                     }
                 )
-                self.log("INFO", f"{instrument}: Signal {signal['direction']} (force {signal['score']}/5)")
+                self.log("INFO", f"{instrument}: Signal {direction} validé (force {score}/5)")
+            elif direction in ("BUY", "SELL"):
+                reason = "score trop faible" if score < self.min_broadcast_score else "confirmation M15 absente"
+                self.log("DEBUG", f"{instrument}: Signal filtré ({reason})")
 
             self.last_analysis[instrument] = time.time()
             return result

@@ -9,6 +9,7 @@ Usage:
 
 import sys
 import json
+import math
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Tuple, Optional
 from pathlib import Path
@@ -32,6 +33,7 @@ class SimpleBacktester:
         self.instrument = instrument
         self.trades = []
         self.balances = [1000.0]
+        self.spread_pips = 2.0
         self.memory = AgentMemory()
         self.store = RuntimeStore()
 
@@ -91,12 +93,15 @@ class SimpleBacktester:
             pips_move = (exit_price - trade["entry"]) / pip
         else:
             pips_move = (trade["entry"] - exit_price) / pip
-        
-        pip_value = 10.0  # Simplifié
-        pnl = pips_move * pip_value * trade["size"]
+
+        pip_value = self._pip_value_per_lot()
+        spread_cost = self.spread_pips * pip_value * trade["size"]
+        pnl = (pips_move * pip_value * trade["size"]) - spread_cost
         
         trade["status"] = "closed"
         trade["exit_price"] = exit_price
+        trade["spread_pips"] = self.spread_pips
+        trade["spread_cost"] = round(spread_cost, 4)
         trade["pnl"] = pnl
         trade["close_reason"] = reason
         
@@ -106,25 +111,70 @@ class SimpleBacktester:
         return trade
 
     def _pip_size(self) -> float:
+        if "JPY" in self.instrument:
+            return 0.01
         if "XAU" in self.instrument:
             return 0.10
         if "BTC" in self.instrument:
             return 1.0
         return 0.0001
 
-    def run_backtest(self, days: int = 10) -> Dict:
+    def _pip_value_per_lot(self) -> float:
+        """Approximation de valeur de pip selon l'instrument."""
+        pip = self._pip_size()
+        if pip >= 1.0:   # BTC, ETH...
+            return 1.0
+        if pip >= 0.1:   # XAU, XAG...
+            return 1.0
+        return 10.0      # Forex standards (incl. JPY)
+
+    def run_backtest(self, days: int = 10, spread_pips: float = 2.0, score_threshold: int = 3) -> Dict:
         """Exécute le backtest sur N jours."""
         print(f"\n[BACKTEST] Démarrage sur {self.instrument} ({days} jours)")
-        
+
+        self.spread_pips = float(spread_pips)
         candles = self.load_historical_data(days)
         if not candles:
             print("[BACKTEST] Aucune donnée chargée")
             return {"error": "no_data"}
-        
+
         print(f"[BACKTEST] Données chargées: {len(candles)} candles")
-        
-        for i, candle in enumerate(candles):
-            self.simulate_candle(candle, candles[i-1] if i > 0 else None)
+
+        min_window = 60
+        if len(candles) < min_window:
+            print(f"[BACKTEST] Données insuffisantes: {len(candles)} < {min_window}")
+            return self._compute_stats()
+
+        for i in range(min_window - 1, len(candles)):
+            candle = candles[i]
+            prev_candle = candles[i - 1] if i > 0 else None
+            self.simulate_candle(candle, prev_candle)
+
+            has_open_trade = any(t.get("status") == "open" for t in self.trades)
+            if has_open_trade:
+                continue
+
+            window = candles[i - min_window + 1:i + 1]
+            signal = calculate_signal_score(window, self.instrument)
+            score = int(signal.get("score", 0) or 0)
+            direction = signal.get("direction")
+            if score < int(score_threshold) or direction not in {"BUY", "SELL"}:
+                continue
+
+            entry = float(candle.get("close", 0.0))
+            pip = self._pip_size()
+            atr_pips = float(signal.get("atr_pips", 0.0) or 0.0)
+            stop_pips = max(6.0, atr_pips)
+            take_pips = max(8.0, stop_pips * 1.5)
+
+            if direction == "BUY":
+                sl = entry - (stop_pips * pip)
+                tp = entry + (take_pips * pip)
+            else:
+                sl = entry + (stop_pips * pip)
+                tp = entry - (take_pips * pip)
+
+            self._open_trade(direction, entry, sl, tp)
         
         return self._compute_stats()
 
@@ -140,12 +190,23 @@ class SimpleBacktester:
                 "win_rate": 0.0,
                 "total_pnl": 0.0,
                 "max_drawdown": 0.0,
+                "sharpe_ratio": 0.0,
+                "profit_factor": 0.0,
             }
         
         pnls = [t["pnl"] for t in closed_trades]
         wins = sum(1 for p in pnls if p > 0)
         win_rate = wins / len(pnls) if pnls else 0.0
         total_pnl = sum(pnls)
+
+        gross_profit = sum(p for p in pnls if p > 0)
+        gross_loss = abs(sum(p for p in pnls if p < 0))
+        profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (float("inf") if gross_profit > 0 else 0.0)
+
+        avg_pnl = total_pnl / len(pnls) if pnls else 0.0
+        variance = sum((p - avg_pnl) ** 2 for p in pnls) / len(pnls) if pnls else 0.0
+        std_dev = math.sqrt(variance)
+        sharpe_ratio = (avg_pnl / std_dev) * math.sqrt(len(pnls)) if std_dev > 0 else 0.0
         
         # Max drawdown
         max_drawdown = 0.0
@@ -165,6 +226,8 @@ class SimpleBacktester:
             "total_pnl": round(total_pnl, 2),
             "avg_pnl_per_trade": round(total_pnl / len(closed_trades) if closed_trades else 0, 2),
             "max_drawdown": round(max_drawdown, 3),
+            "sharpe_ratio": round(sharpe_ratio, 3),
+            "profit_factor": round(profit_factor, 3) if math.isfinite(profit_factor) else float("inf"),
             "final_balance": round(self.balances[-1], 2),
             "trades_sample": closed_trades[:5],  # Premiers 5 trades
         }
