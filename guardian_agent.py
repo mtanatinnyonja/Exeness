@@ -33,6 +33,17 @@ class GuardianAgent(Agent):
             self.check_count += 1
             self.write_heartbeat({"check_count": self.check_count})
             await asyncio.sleep(5)  # Check toutes les 5s
+
+    def _modify_position_safe(self, instrument: str, stop_loss: float = None, take_profit: float = None) -> bool:
+        """Wrapper sûr: modifie une position si le broker expose modify_position."""
+        if not hasattr(self.broker, "modify_position"):
+            self.log("WARN", "Broker.modify_position indisponible, trailing ignoré")
+            return False
+        try:
+            return bool(self.broker.modify_position(instrument, stop_loss=stop_loss, take_profit=take_profit))
+        except Exception as e:
+            self.log("WARN", f"modify_position échoué sur {instrument}: {e}")
+            return False
     
     async def _check_all_positions(self):
         """Surveille toutes les positions ouvertes."""
@@ -57,7 +68,7 @@ class GuardianAgent(Agent):
     async def _monitor_position(self, position: Dict):
         """Surveille une position et décide action."""
         instrument = position.get("instrument", "?")
-        direction = position.get("direction", "?")
+        direction = str(position.get("direction", "?")).upper()
         entry = float(position.get("entry_price", 0))
         current = float(position.get("current_price", 0))
         unrealized_pnl = float(position.get("unrealized_pnl", 0))
@@ -78,7 +89,21 @@ class GuardianAgent(Agent):
             signal = calculate_signal_score(candles, instrument)
             signal_direction = signal.get("direction", "WAIT")
             signal_score = signal.get("score", 0)
-            atr = float(signal.get("details", {}).get("atr", 0) or 0)
+            atr = float(calculate_atr(candles) or 0)
+            pip_size = float(self.broker._pip_size(instrument) or 0.0001)
+            atr_pips = (atr / pip_size) if pip_size > 0 and atr > 0 else 0.0
+            if atr_pips <= 0:
+                return
+
+            # Mouvement latent en pips, signé dans le sens de la position
+            if direction == "BUY":
+                move_pips = (current - entry) / pip_size if entry > 0 and current > 0 else 0.0
+            else:
+                move_pips = (entry - current) / pip_size if entry > 0 and current > 0 else 0.0
+
+            loss_threshold_pips = atr_pips * 2.0
+            gain_threshold_pips = atr_pips * 4.0
+            trail_threshold_pips = atr_pips * 2.0
             
             action = "HOLD"
             reason = "position stable"
@@ -92,33 +117,28 @@ class GuardianAgent(Agent):
                 action = "CLOSE"
                 reason = f"reversal BUY détecté ({signal_score}/5)"
 
-            # 2. Perte trop grande → CLOSE (SL manuel de sécurité si MT5 échoue)
-            elif unrealized_pnl < -10.0:
+            # 2. Seuil perte relatif ATR (en pips) → CLOSE
+            elif move_pips <= -loss_threshold_pips:
                 action = "CLOSE"
-                reason = f"perte urgence ${unrealized_pnl:.2f}"
+                reason = f"perte ATR: {move_pips:.1f}p <= -{loss_threshold_pips:.1f}p"
 
-            # 3. Breakeven : si profit >= 50% du TP, déplacer SL à l'entrée
-            elif (not state["breakeven_set"] and entry > 0 and sl_price > 0
-                    and tp_price > 0 and current > 0 and atr > 0):
-                tp_distance = abs(tp_price - entry)
-                current_distance = abs(current - entry)
-                if tp_distance > 0 and current_distance >= tp_distance * 0.5:
-                    # Déplacer SL au breakeven + 1 ATR de marge
-                    margin = atr * 0.3
-                    if direction == "BUY":
-                        new_sl = entry + margin
-                        if new_sl > sl_price:  # seulement si ça améliore le SL
-                            action = "TIGHTEN"
-                            reason = "breakeven: SL déplacé à l'entrée"
-                            state["breakeven_set"] = True
-                    elif direction == "SELL":
-                        new_sl = entry - margin
-                        if new_sl < sl_price:
-                            action = "TIGHTEN"
-                            reason = "breakeven: SL déplacé à l'entrée"
-                            state["breakeven_set"] = True
+            # 3. Seuil gain relatif ATR (en pips) → CLOSE part prudence Guardian
+            elif move_pips >= gain_threshold_pips:
+                action = "CLOSE"
+                reason = f"gain ATR: {move_pips:.1f}p >= {gain_threshold_pips:.1f}p"
 
-            # 4. Trailing stop : si profit > peak, serrer le SL
+            # 4. Trailing break-even: profit > ATR*2.0, resserrer le SL à l'entrée
+            elif (not state["breakeven_set"] and entry > 0 and move_pips >= trail_threshold_pips):
+                new_sl = entry
+                can_improve = (direction == "BUY" and (sl_price <= 0 or new_sl > sl_price)) or (
+                    direction == "SELL" and (sl_price <= 0 or new_sl < sl_price)
+                )
+                if can_improve and self._modify_position_safe(instrument, stop_loss=new_sl):
+                    state["breakeven_set"] = True
+                    action = "TIGHTEN"
+                    reason = f"break-even activé (> {trail_threshold_pips:.1f}p)"
+
+            # 5. Trailing stop : si profit > peak, close sur fort repli
             if action == "HOLD" and state["breakeven_set"] and atr > 0 and current > 0:
                 state["peak_pnl"] = max(state["peak_pnl"], unrealized_pnl)
                 # Si on est retombé de 40% depuis le peak → CLOSE pour protéger gains
@@ -136,14 +156,8 @@ class GuardianAgent(Agent):
             if action == "CLOSE":
                 await self.send_message(
                     "ExecutionAgent",
-                    "guardian_action",
-                    {"instrument": instrument, "action": "CLOSE", "reason": reason, "unrealized_pnl": unrealized_pnl}
-                )
-            elif action == "TIGHTEN" and new_sl is not None:
-                await self.send_message(
-                    "ExecutionAgent",
-                    "guardian_action",
-                    {"instrument": instrument, "action": "TIGHTEN", "reason": reason, "new_sl": new_sl}
+                    "close_position",
+                    {"instrument": instrument, "reason": reason, "unrealized_pnl": unrealized_pnl}
                 )
         
         except Exception as e:

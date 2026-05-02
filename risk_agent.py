@@ -102,7 +102,8 @@ class RiskAgent(Agent):
 
             # RR minimum — évite les trades à faible espérance mathématique
             details = signal_data.get("details", {}) or {}
-            rr_key = "rr_buy" if direction == "BUY" else "rr_sell"
+            direction_up = str(direction).upper()
+            rr_key = "rr_buy" if direction_up == "BUY" else "rr_sell"
             rr = float(details.get(rr_key, 0.0) or 0.0)
             if 0 < rr < self.min_rr:
                 await self.send_message(
@@ -115,6 +116,20 @@ class RiskAgent(Agent):
                     }
                 )
                 self.log("INFO", f"{instrument}: Bloqué RR {rr:.2f}")
+                return
+
+            quality_score = float(details.get("quality_score", 0.0) or 0.0)
+            if quality_score < 0.4:
+                await self.send_message(
+                    "*",
+                    "risk_decision",
+                    {
+                        "instrument": instrument,
+                        "approved": False,
+                        "reason": f"Qualité insuffisante: {quality_score:.2f} < 0.40",
+                    }
+                )
+                self.log("INFO", f"{instrument}: Bloqué quality_score ({quality_score:.2f})")
                 return
 
             # Check news
@@ -132,8 +147,8 @@ class RiskAgent(Agent):
                     )
                     self.log("WARN", f"{instrument}: Bloqué par news")
                     return
-            except Exception:
-                pass
+            except Exception as e:
+                self.log("WARN", f"Calendrier: {e}")
             
             # Check protections
             candles = self.broker.get_candles(instrument, "H1", 60)
@@ -159,7 +174,7 @@ class RiskAgent(Agent):
                     self.log("WARN", f"{instrument}: Bloqué par protections")
                     return
             
-            # Approuver le signal avec SL/TP basés sur ATR réel
+            # Approuver le signal avec SL/TP basés sur niveaux S/R + plancher ATR
             details = signal_data.get("details", {}) or {}
             atr_pips = float(details.get("atr_pips", 0.0) or 0.0)
             # Fallback si ATR trop faible
@@ -171,21 +186,39 @@ class RiskAgent(Agent):
                     atr_pips = 30.0
                 else:
                     atr_pips = 15.0
-            sl_pips = max(int(atr_pips * 1.5), 10)
-            tp_pips = max(int(atr_pips * 3.0), int(sl_pips * 1.5))
+
+            distance_to_support = float(details.get("distance_to_support_pips", 0.0) or 0.0)
+            distance_to_resistance = float(details.get("distance_to_resistance_pips", 0.0) or 0.0)
+            min_stop_pips = max(atr_pips * 1.0, 6.0)
+
+            if direction_up == "BUY":
+                sl_from_structure = distance_to_support
+                tp_from_structure = distance_to_resistance
+            else:
+                sl_from_structure = distance_to_resistance
+                tp_from_structure = distance_to_support
+
+            sl_pips = max(int(round(sl_from_structure)), int(round(min_stop_pips)))
+            tp_pips = max(int(round(tp_from_structure)), int(round(min_stop_pips)))
+
+            rr_component = max(0.0, min(rr / 3.0, 1.0))
+            quality_component = max(0.0, min(quality_score / 1.5, 1.0))
+            risk_score = int(round(1 + (4 * ((0.6 * quality_component) + (0.4 * rr_component)))))
+            risk_score = max(1, min(5, risk_score))
+
             await self.send_message(
                 "*",
                 "risk_decision",
                 {
                     "instrument": instrument,
                     "approved": True,
-                    "risk_score": 3,
+                    "risk_score": risk_score,
                     "approved_at": asyncio.get_event_loop().time(),
                     "sl_pips": sl_pips,
                     "tp_pips": tp_pips,
                 }
             )
-            self.log("INFO", f"{instrument}: Approuvé (risque modéré)")
+            self.log("INFO", f"{instrument}: Approuvé (risk_score={risk_score}/5, rr={rr:.2f}, q={quality_score:.2f})")
             self.processed_signals += 1
         
         except Exception as e:

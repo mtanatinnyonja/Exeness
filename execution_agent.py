@@ -12,6 +12,7 @@ from learning_store import AgentMemory
 from circuit_breaker import CircuitBreaker
 from audit_logger import get_audit_logger
 from telegram_notifier import TelegramNotifier
+from signal_engine import calculate_atr
 from settings import MAX_RISK_PER_TRADE, MAX_OPEN_POSITIONS
 
 
@@ -39,7 +40,7 @@ class ExecutionAgent(Agent):
     async def on_startup(self):
         """Initialisation."""
         self.log("INFO", "Démarré. En attente de décisions...")
-        await self.bus.subscribe(self.name, ["buy_signal", "sell_signal", "close_position", "guardian_action"])
+        await self.bus.subscribe(self.name, ["buy_signal", "sell_signal", "close_position"])
     
     async def run(self):
         """Boucle autonome — exécute les ordres approuvés."""
@@ -58,12 +59,8 @@ class ExecutionAgent(Agent):
                 await self._execute_trade(message.payload)
             elif message and message.event_type == "close_position":
                 await self._close_position(message.payload)
-            elif message and message.event_type == "guardian_action":
-                action = message.payload.get("action", "HOLD")
-                if action == "CLOSE":
-                    await self._close_position(message.payload)
-                elif action == "TIGHTEN":
-                    await self._tighten_sl(message.payload)
+            elif message:
+                self.log("WARN", f"Message inconnu ignoré: {message.event_type}")
             
             # Surveiller les positions existantes
             await self._check_positions()
@@ -195,15 +192,19 @@ class ExecutionAgent(Agent):
                 
                 self.log("INFO", f"{instrument}: {direction} executé | vol={volume} | SL={sl_pips}p TP={tp_pips}p")
                 self.executed_trades += 1
-                self.telegram.notify_trade_opened(
-                    instrument=instrument,
-                    direction=direction,
-                    volume=volume,
-                    entry_price=float(order.get("entry_price", 0)),
-                    sl_pips=int(sl_pips),
-                    tp_pips=int(tp_pips),
-                    confidence=confidence,
-                    risk_usd=risk_usd,
+                self.telegram.send_trade_alert(
+                    trade_data={
+                        "instrument": instrument,
+                        "direction": direction,
+                        "volume": volume,
+                        "entry": float(order.get("entry_price", 0)),
+                        "sl": float(order.get("stop_loss", 0) or sl_pips),
+                        "tp": float(order.get("take_profit", 0) or tp_pips),
+                        "sl_pips": int(sl_pips),
+                        "tp_pips": int(tp_pips),
+                        "signal_score": int(decision.get("signal_score", 0) or 0),
+                    },
+                    signal_details=decision.get("signal_details", {}) or {},
                 )
         
         except Exception as e:
@@ -227,12 +228,73 @@ class ExecutionAgent(Agent):
             for pos in positions:
                 instrument = pos.get("instrument", "?")
                 pnl = float(pos.get("unrealized_pnl", 0))
-                
+
                 # Log pour monitoring
                 if pnl < -5.0:
                     self.log("WARN", f"{instrument}: Perte ${pnl:.2f}")
+                await self._update_trailing_stop(pos)
         except Exception:
             pass
+
+    async def _update_trailing_stop(self, position: Dict[str, Any]):
+        """Met à jour le trailing stop basé ATR H1 (sans modifier le TP)."""
+        instrument = str(position.get("instrument", "?"))
+        direction = str(position.get("direction", "")).upper()
+        ticket = position.get("ticket")
+
+        if direction not in ("BUY", "SELL"):
+            return
+        if ticket in (None, "", 0):
+            return
+
+        current_price = float(
+            position.get("price_current", position.get("current_price", 0.0)) or 0.0
+        )
+        sl_current = float(position.get("sl", position.get("stop_loss", 0.0)) or 0.0)
+        entry_price = float(position.get("avg_price", position.get("entry_price", 0.0)) or 0.0)
+        if current_price <= 0 or entry_price <= 0:
+            return
+
+        try:
+            candles_h1 = self.broker.get_candles(instrument, "H1", 20)
+            if len(candles_h1) < 20:
+                return
+
+            atr = float(calculate_atr(candles_h1) or 0.0)
+            if atr <= 0:
+                return
+
+            pip_size = float(self.broker._pip_size(instrument) or 0.0001)
+            if pip_size <= 0:
+                return
+
+            if direction == "BUY":
+                profit_pips = (current_price - entry_price) / pip_size
+            else:
+                profit_pips = (entry_price - current_price) / pip_size
+
+            atr_pips = atr / pip_size
+            trigger_pips = atr_pips * 1.5
+            if profit_pips < trigger_pips:
+                return
+
+            if direction == "BUY":
+                new_sl = current_price - (0.8 * atr)
+                if sl_current > 0 and new_sl <= sl_current:
+                    return
+            else:
+                new_sl = current_price + (0.8 * atr)
+                if sl_current > 0 and new_sl >= sl_current:
+                    return
+
+            changed = self.broker.modify_sl(int(ticket), float(new_sl))
+            if changed:
+                self.log(
+                    "INFO",
+                    f"Trailing stop mis à jour : {instrument} SL {sl_current:.5f} -> {new_sl:.5f}",
+                )
+        except Exception as e:
+            self.log("WARN", f"{instrument}: trailing stop indisponible: {str(e)[:100]}")
     
     async def _close_position(self, data: Dict[str, Any]):
         """Ferme une position."""

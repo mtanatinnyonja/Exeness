@@ -15,6 +15,7 @@ import sys
 import os
 import threading
 import signal
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -34,8 +35,25 @@ def start_dashboard():
 async def start_agents():
     """Lance tous les agents IA."""
     from agents_runtime import AgentsRuntime
+    from telegram_notifier import TelegramNotifier
 
     runtime = AgentsRuntime()
+    notifier = TelegramNotifier()
+    notifier.start_async_dispatcher(asyncio.get_running_loop())
+
+    async def _daily_summary_scheduler():
+        while True:
+            now = datetime.now(timezone.utc)
+            target = now.replace(hour=22, minute=0, second=0, microsecond=0)
+            if now >= target:
+                target = target + timedelta(days=1)
+            await asyncio.sleep(max(1.0, (target - now).total_seconds()))
+            try:
+                notifier.send_daily_summary()
+            except Exception as e:
+                print(f"[TELEGRAM] daily summary error: {e}")
+
+    daily_task = asyncio.create_task(_daily_summary_scheduler(), name="daily-summary-22utc")
 
     loop = asyncio.get_running_loop()
 
@@ -46,7 +64,17 @@ async def start_agents():
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
 
-    await runtime.start()
+    try:
+        await runtime.start()
+    finally:
+        daily_task.cancel()
+        try:
+            await daily_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
+        await notifier.stop_async_dispatcher()
 
 
 def main():

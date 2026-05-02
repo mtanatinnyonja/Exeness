@@ -10,10 +10,11 @@ from typing import Dict, List, Optional, Tuple
 from settings import (
     BROKER, INITIAL_CAPITAL, MT5_TERMINAL_PATH, MT5_LOGIN, MT5_PASSWORD,
     MT5_SERVER, REQUIRE_DEMO_ACCOUNT, ALLOW_TRADE_EXECUTION,
-    MT5_MAGIC_NUMBER, MT5_DEVIATION,
+    MT5_MAGIC_NUMBER, MT5_DEVIATION, PAPER_TRADING,
     MT5_MAX_VISIBLE_SYMBOLS, PREFERRED_SYMBOLS,
 )
 from runtime_db import RuntimeStore
+from paper_broker import PaperBroker as ExternalPaperBroker
 
 
 class PaperBroker:
@@ -122,7 +123,7 @@ class PaperBroker:
     def close_position(self, instrument: str) -> Optional[float]:
         return 0.0
 
-    def modify_sl(self, instrument: str, new_sl: float) -> bool:
+    def modify_sl(self, ticket_or_instrument, new_sl: float) -> bool:
         return False
 
     def list_visible_symbols(self) -> List[str]:
@@ -226,6 +227,7 @@ class MT5Broker:
 
     def _describe_trade_retcode(self, code) -> str:
         descriptions = {
+            10004: "requote",
             10017: "trade disabled (broker/account)",
             10018: "market closed",
             10019: "not enough money",
@@ -586,20 +588,49 @@ class MT5Broker:
             'sl': sl,
             'tp': tp,
             'magic': MT5_MAGIC_NUMBER,
+            'deviation': MT5_DEVIATION,
         }
         result = self.mt5.order_send(request)
         if result is None or result.retcode not in {self.mt5.TRADE_RETCODE_DONE, self.mt5.TRADE_RETCODE_DONE_PARTIAL}:
+            err = self.mt5.last_error() if result is None else int(getattr(result, "retcode", 0) or 0)
+            desc = self._describe_trade_retcode(err)
+            print(f"[MT5Broker][WARN] modify_position échoué: {err} ({desc})")
             return False
         return True
 
-    def modify_sl(self, instrument: str, new_sl: float) -> bool:
-        """Modifie le SL de la première position ouverte sur l'instrument."""
+    def modify_sl(self, ticket_or_instrument, new_sl: float) -> bool:
+        """Modifie le SL d'une position (par ticket préféré, sinon instrument)."""
         self._ensure_ready()
-        symbol = self._resolve_symbol(instrument)
-        positions = self.mt5.positions_get(symbol=symbol) or []
-        if not positions:
+        ticket = None
+
+        if isinstance(ticket_or_instrument, (int, float)):
+            ticket = int(ticket_or_instrument)
+        else:
+            raw = str(ticket_or_instrument).strip()
+            if raw.isdigit():
+                ticket = int(raw)
+
+        if ticket is None:
+            symbol = self._resolve_symbol(str(ticket_or_instrument))
+            positions = self.mt5.positions_get(symbol=symbol) or []
+            if not positions:
+                return False
+            ticket = int(getattr(positions[0], "ticket", 0) or 0)
+
+        if ticket <= 0:
             return False
-        return self.modify_position(int(getattr(positions[0], "ticket", 0)), new_sl=new_sl)
+
+        # Retry x1 sur erreurs MT5 transitoires (requote, marché fermé, pas de connexion).
+        attempts = 2
+        for idx in range(attempts):
+            ok = self.modify_position(ticket, new_sl=new_sl, new_tp=None)
+            if ok:
+                return True
+            if idx == 0:
+                print(f"[MT5Broker][WARN] modify_sl tentative 1 échouée (ticket={ticket})")
+
+        print(f"[MT5Broker][WARN] modify_sl échec définitif (ticket={ticket})")
+        return False
 
     def close_position(self, instrument: str) -> Optional[float]:
         positions = self.mt5.positions_get(symbol=symbol) or []
@@ -638,10 +669,13 @@ class MT5Broker:
 
 
 def build_broker():
+    if bool(PAPER_TRADING):
+        return ExternalPaperBroker()
+
     target = (BROKER or "mt5").lower().strip()
     if target == "mt5":
         broker = MT5Broker()
         if broker.connected or broker.mt5 is not None:
             return broker
-        return PaperBroker(broker.last_error or "MT5 non disponible")
-    return PaperBroker("Mode paper forcé")
+        return ExternalPaperBroker()
+    return ExternalPaperBroker()

@@ -5,11 +5,15 @@ momentum, régime marché, support/résistance par pivots et score de trading.
 """
 
 import math
+import json
+from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 from settings import (
     RSI_PERIOD, RSI_OVERSOLD, RSI_OVERBOUGHT,
     MA_FAST, MA_SLOW, BB_PERIOD, BB_STD, ATR_PERIOD
 )
+
+OPTIMIZED_PARAMS_FILE = Path("data/optimized_params.json")
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +44,8 @@ def calculate_rsi(closes: List[float], period: int = RSI_PERIOD) -> float:
         avg_loss = (avg_loss * (period - 1) + loss) / period
 
     if avg_loss == 0:
-        return 100.0
+        # Marché complètement plat : avg_gain==0 et avg_loss==0 → RSI indéfini, convention 50.0 (identique MT5)
+        return 50.0 if avg_gain == 0 else 100.0
     rs = avg_gain / avg_loss
     return 100.0 - (100.0 / (1.0 + rs))
 
@@ -97,6 +102,43 @@ def calculate_atr(candles: List[Dict], period: int = ATR_PERIOD) -> float:
     return atr
 
 
+def _recompute_min_candles() -> int:
+    return max(int(RSI_PERIOD) * 2 + 1, 34, int(MA_SLOW), 60)
+
+
+def apply_optimized_params(params: Dict) -> None:
+    """Apply optimized indicator parameters to this module at runtime."""
+    global RSI_PERIOD, MA_FAST, MA_SLOW, BB_PERIOD, ATR_PERIOD, _MIN_CANDLES
+    if not isinstance(params, dict):
+        return
+    try:
+        if "RSI_PERIOD" in params:
+            RSI_PERIOD = max(2, int(params["RSI_PERIOD"]))
+        if "MA_FAST" in params:
+            MA_FAST = max(2, int(params["MA_FAST"]))
+        if "MA_SLOW" in params:
+            MA_SLOW = max(MA_FAST + 1, int(params["MA_SLOW"]))
+        if "BB_PERIOD" in params:
+            BB_PERIOD = max(5, int(params["BB_PERIOD"]))
+        if "ATR_PERIOD" in params:
+            ATR_PERIOD = max(2, int(params["ATR_PERIOD"]))
+    except Exception:
+        return
+    _MIN_CANDLES = _recompute_min_candles()
+
+
+def _load_optimized_params_if_any() -> None:
+    if not OPTIMIZED_PARAMS_FILE.exists():
+        return
+    try:
+        payload = json.loads(OPTIMIZED_PARAMS_FILE.read_text(encoding="utf-8"))
+        # Accept both {"params": {...}} and flat dict formats.
+        params = payload.get("params", payload) if isinstance(payload, dict) else {}
+        apply_optimized_params(params)
+    except Exception:
+        return
+
+
 def calculate_adx(candles: List[Dict], period: int = 14) -> float:
     """
     Average Directional Index (ADX) méthode Wilder.
@@ -147,7 +189,7 @@ def calculate_adx(candles: List[Dict], period: int = 14) -> float:
     return round(adx, 2)
 
 
-
+def calculate_macd(closes: List[float]) -> Tuple[float, float]:
     """
     MACD (12, 26, 9) avec signal EMA(9) correct sur la série MACD.
     Nécessite au moins 26 + 9 - 1 = 34 valeurs.
@@ -312,6 +354,82 @@ def calculate_trend_strength(closes: List[float], period: int = 20) -> float:
     return round(slope_pct * (0.5 + efficiency), 4)
 
 
+def _candle_volume(candle: Dict) -> float:
+    """Retourne le volume d'une bougie avec fallback tick_volume/volume."""
+    v = candle.get("tick_volume", candle.get("volume", 0.0))
+    try:
+        return float(v or 0.0)
+    except Exception:
+        return 0.0
+
+
+def calculate_volume_filter(candles: List[Dict], lookback: int = 20) -> Dict:
+    """
+    Filtre volume simple sur les dernières bougies.
+    Fallback robuste si volume absent/invalide.
+    """
+    if not candles:
+        return {
+            "volume_ratio": 1.0,
+            "is_high_volume": False,
+            "volume_signal": "faible",
+        }
+
+    recent = candles[-lookback:] if len(candles) >= lookback else candles
+    vols = [_candle_volume(c) for c in recent]
+    last_vol = _candle_volume(candles[-1])
+    avg_vol = (sum(vols) / len(vols)) if vols else 0.0
+
+    if avg_vol <= 0 or last_vol <= 0:
+        return {
+            "volume_ratio": 1.0,
+            "is_high_volume": False,
+            "volume_signal": "faible",
+        }
+
+    volume_ratio = last_vol / avg_vol
+    is_high_volume = volume_ratio >= 1.3
+    return {
+        "volume_ratio": round(volume_ratio, 3),
+        "is_high_volume": is_high_volume,
+        "volume_signal": "confirme" if is_high_volume else "faible",
+    }
+
+
+def calculate_obv(candles: List[Dict]) -> Dict:
+    """
+    On Balance Volume et pente sur 10 bougies.
+    Retourne un trend: haussiere/baissiere/neutre.
+    """
+    if len(candles) < 2:
+        return {"obv_trend": "neutre", "obv_slope": 0.0}
+
+    obv = 0.0
+    series = [obv]
+    for i in range(1, len(candles)):
+        prev_close = float(candles[i - 1].get("close", 0.0) or 0.0)
+        close = float(candles[i].get("close", 0.0) or 0.0)
+        vol = _candle_volume(candles[i])
+        if close > prev_close:
+            obv += vol
+        elif close < prev_close:
+            obv -= vol
+        series.append(obv)
+
+    if len(series) < 2:
+        return {"obv_trend": "neutre", "obv_slope": 0.0}
+
+    window = min(10, len(series) - 1)
+    slope = (series[-1] - series[-1 - window]) / max(window, 1)
+    if slope > 0:
+        trend = "haussiere"
+    elif slope < 0:
+        trend = "baissiere"
+    else:
+        trend = "neutre"
+    return {"obv_trend": trend, "obv_slope": round(slope, 3)}
+
+
 # ---------------------------------------------------------------------------
 # Régime marché
 # ---------------------------------------------------------------------------
@@ -346,9 +464,12 @@ def build_human_analysis_summary(
     rr = rr_buy if direction == "BUY" else rr_sell if direction == "SELL" else max(rr_buy, rr_sell)
     pressure = "acheteuse" if bias > 0.35 else "vendeuse" if bias < -0.35 else "mixte"
     action = direction or "WAIT"
+    mtf_confirmed = bool(details.get("mtf_confirmed", False))
+    mtf_state = "oui" if mtf_confirmed else "non"
     return (
         f"Lecture humaine: régime {regime}, pression {pressure}, "
-        f"pattern {pattern}, RSI {rsi:.1f}, RR {rr:.2f}, score {score}/5, biais {action}."
+        f"pattern {pattern}, RSI {rsi:.1f}, RR {rr:.2f}, score {score}/5, biais {action}, "
+        f"mtf_confirmed={mtf_state}."
     )
 
 
@@ -471,7 +592,7 @@ def build_price_action_description(candles: List[Dict], instrument: str = "") ->
 # MACD : 34
 # MA lente : 50
 # S/R pivots : fenêtre 40 + marges
-_MIN_CANDLES = max(RSI_PERIOD * 2 + 1, 34, MA_SLOW, 60)
+_MIN_CANDLES = _recompute_min_candles()
 
 
 def _pip_factor_for(current_price: float, instrument: str = "") -> float:
@@ -504,11 +625,11 @@ def calculate_signal_score(candles: List[Dict], instrument: str = "") -> Dict:
     highs = [c["high"] for c in candles]
     lows = [c["low"] for c in candles]
 
-    rsi = calculate_rsi(closes)
+    rsi = calculate_rsi(closes, RSI_PERIOD)
     ma_fast = calculate_ma(closes, MA_FAST)
     ma_slow = calculate_ma(closes, MA_SLOW)
-    bb_upper, bb_mid, bb_lower = calculate_bollinger(closes)
-    atr = calculate_atr(candles)
+    bb_upper, bb_mid, bb_lower = calculate_bollinger(closes, period=BB_PERIOD, std_mult=BB_STD)
+    atr = calculate_atr(candles, period=ATR_PERIOD)
     macd, macd_signal = calculate_macd(closes)
     adx = calculate_adx(candles)
     candle_pattern = detect_candle_pattern(candles)
@@ -520,6 +641,9 @@ def calculate_signal_score(candles: List[Dict], instrument: str = "") -> Dict:
     momentum_5 = calculate_price_momentum(closes, 5)
     momentum_20 = calculate_price_momentum(closes, 20)
     trend_strength = calculate_trend_strength(closes, 20)
+    volume_filter = calculate_volume_filter(candles, lookback=20)
+    obv_data = calculate_obv(candles)
+    obv_trend = obv_data.get("obv_trend", "neutre")
 
     # S/R via pivots (fenêtre 40 bougies, hors la dernière)
     resistance, support = calculate_support_resistance(highs[:-1], lows[:-1], window=40)
@@ -564,6 +688,9 @@ def calculate_signal_score(candles: List[Dict], instrument: str = "") -> Dict:
         "rr_sell": rr_sell,
         "breakout_up": breakout_up,
         "breakout_down": breakout_down,
+        "volume_ratio": float(volume_filter.get("volume_ratio", 1.0) or 1.0),
+        "volume_signal": str(volume_filter.get("volume_signal", "faible")),
+        "obv_trend": str(obv_trend),
     }
 
     # --- RSI ---
@@ -658,6 +785,23 @@ def calculate_signal_score(candles: List[Dict], instrument: str = "") -> Dict:
         bearish_signals += 1
         details["pattern_signal"] = f"{candle_pattern} → bearish"
 
+    # --- Ajustements volume/OBV sur la direction dominante ---
+    is_high_volume = bool(volume_filter.get("is_high_volume", False))
+    if bullish_signals > bearish_signals:
+        if obv_trend == "baissiere":
+            bullish_signals -= 0.5
+            details["obv_alignment"] = "BUY pénalisé: OBV baissier"
+        if is_high_volume:
+            bullish_signals += 0.3
+            details["volume_alignment"] = "BUY confirmé par volume"
+    elif bearish_signals > bullish_signals:
+        if obv_trend == "haussiere":
+            bearish_signals -= 0.5
+            details["obv_alignment"] = "SELL pénalisé: OBV haussier"
+        if is_high_volume:
+            bearish_signals += 0.3
+            details["volume_alignment"] = "SELL confirmé par volume"
+
     # --- Résultat ---
     if bullish_signals > bearish_signals:
         score = min(5, int(round(bullish_signals)))
@@ -683,6 +827,7 @@ def calculate_signal_score(candles: List[Dict], instrument: str = "") -> Dict:
 
     details["signal_bias"] = round(bullish_signals - bearish_signals, 2)
     details["quality_score"] = round((score / 5) * min(1.5, max(rr, 0.5)), 2)
+    details["mtf_confirmed"] = False
     details["human_summary"] = build_human_analysis_summary(details, direction, score)
 
     return {
@@ -692,3 +837,69 @@ def calculate_signal_score(candles: List[Dict], instrument: str = "") -> Dict:
         "pattern": pattern,
         "atr_pips": atr_pips,
     }
+
+
+def calculate_mtf_signal(candles_h1: List[Dict], candles_d1: Optional[List[Dict]], instrument: str = "") -> Dict:
+    """
+    Calcule un signal multi-timeframe (H1 principal, D1 tendance de fond).
+    Rétrocompatible: si D1 absent, retourne le signal H1 inchangé.
+    """
+    h1_signal = calculate_signal_score(candles_h1, instrument)
+
+    # Rétrocompatibilité stricte sur le score/direction quand D1 indisponible.
+    if not candles_d1:
+        h1_signal["mtf_confirmed"] = False
+        h1_signal["d1_direction"] = None
+        h1_signal["d1_score"] = 0
+        h1_signal["confluence"] = "neutral"
+        h1_details = h1_signal.get("details", {}) or {}
+        h1_details["mtf_confirmed"] = False
+        h1_details["d1_direction"] = None
+        h1_details["d1_score"] = 0
+        h1_details["confluence"] = "neutral"
+        h1_details["human_summary"] = build_human_analysis_summary(
+            h1_details,
+            h1_signal.get("direction"),
+            int(h1_signal.get("score", 0) or 0),
+        )
+        h1_signal["details"] = h1_details
+        return h1_signal
+
+    d1_signal = calculate_signal_score(candles_d1, instrument)
+    h1_direction = h1_signal.get("direction")
+    d1_direction = d1_signal.get("direction")
+    d1_score = int(d1_signal.get("score", 0) or 0)
+    adjusted_score = int(h1_signal.get("score", 0) or 0)
+    confluence = "neutral"
+    mtf_confirmed = False
+
+    if h1_direction in ("BUY", "SELL"):
+        if d1_direction == h1_direction:
+            confluence = "aligned"
+            mtf_confirmed = True
+        elif d1_direction in ("BUY", "SELL") and d1_direction != h1_direction:
+            confluence = "counter"
+            adjusted_score = max(0, adjusted_score - 2)
+        else:
+            confluence = "neutral"
+            adjusted_score = max(0, adjusted_score - 1)
+
+    result = dict(h1_signal)
+    result["score"] = adjusted_score
+    result["mtf_confirmed"] = mtf_confirmed
+    result["d1_direction"] = d1_direction
+    result["d1_score"] = d1_score
+    result["confluence"] = confluence
+
+    details = dict(result.get("details", {}) or {})
+    details["mtf_confirmed"] = mtf_confirmed
+    details["d1_direction"] = d1_direction
+    details["d1_score"] = d1_score
+    details["confluence"] = confluence
+    details["human_summary"] = build_human_analysis_summary(details, result.get("direction"), adjusted_score)
+    result["details"] = details
+
+    return result
+
+
+_load_optimized_params_if_any()
