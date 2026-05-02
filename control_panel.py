@@ -8,6 +8,7 @@ Accès: http://localhost:8080
 import json
 import os
 import sys
+from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -1942,8 +1943,14 @@ class Handler(BaseHTTPRequestHandler):
                 total_pnl = sum(t.get("pnl", 0) or 0 for t in all_trades if t.get("status") == "closed")
                 llm_calls_today = memory.get_llm_calls_today()
 
-                # Session log from memory
-                session_log = []
+                # Session log from audit_logger
+                try:
+                    from audit_logger import get_audit_logger
+                    session_log = get_audit_logger().get_session_log(50)
+                    llm_calls_today = get_audit_logger().get_daily_stats().get("llm_calls", 0)
+                except Exception:
+                    session_log = []
+                    llm_calls_today = memory.get_llm_calls_today()
 
                 # Market open check (weekday + hour)
                 now = datetime.now(timezone.utc)
@@ -1983,6 +1990,44 @@ class Handler(BaseHTTPRequestHandler):
                 # Best patterns from memory
                 best_patterns = memory.get_best_patterns() if hasattr(memory, "get_best_patterns") else []
 
+                # Scan results from AnalystAgent
+                import time as _time
+                scan_file = Path("data/scan_results.json")
+                smart_scan = {"candidates": [], "rejected": []}
+                trending_pairs = []
+                if scan_file.exists():
+                    try:
+                        scan_data = json.loads(scan_file.read_text(encoding="utf-8"))
+                        smart_scan = {
+                            "candidates": scan_data.get("candidates", []),
+                            "rejected": scan_data.get("rejected", []),
+                        }
+                        trending_pairs = scan_data.get("trending", [])
+                    except Exception:
+                        pass
+
+                # Agents heartbeat
+                hb_file = Path("data/agents_heartbeat.json")
+                agents_status = []
+                if hb_file.exists():
+                    try:
+                        hb_data = json.loads(hb_file.read_text(encoding="utf-8"))
+                        now_ts = datetime.now(timezone.utc).timestamp()
+                        for agent_name, info in hb_data.items():
+                            last_seen_str = info.get("last_seen", "")
+                            try:
+                                last_ts = datetime.fromisoformat(last_seen_str).timestamp()
+                                age_sec = now_ts - last_ts
+                                status = "running" if age_sec < 120 else "stale"
+                            except Exception:
+                                status = "unknown"
+                            agents_status.append({"name": agent_name, "status": status, "last_seen": last_seen_str})
+                    except Exception:
+                        pass
+                if not agents_status:
+                    for name in ["AnalystAgent", "RiskAgent", "DecisionAgent", "ExecutionAgent", "GuardianAgent"]:
+                        agents_status.append({"name": name, "status": "stopped"})
+
                 status = {
                     # Market state
                     "market_open": market_open,
@@ -2008,18 +2053,12 @@ class Handler(BaseHTTPRequestHandler):
                     # Modules
                     "economic_calendar": cal_status,
                     "circuit_breaker": cb_status,
-                    "smart_scan": {"candidates": [], "rejected": []},
-                    "trending_pairs": [],
+                    "smart_scan": smart_scan,
+                    "trending_pairs": trending_pairs,
                     "market_protections": {},
                     "pro_strategies": {},
                     # Agents status
-                    "agents": [
-                        {"name": "AnalystAgent", "status": "running"},
-                        {"name": "RiskAgent", "status": "running"},
-                        {"name": "DecisionAgent", "status": "running"},
-                        {"name": "ExecutionAgent", "status": "running"},
-                        {"name": "GuardianAgent", "status": "running"},
-                    ],
+                    "agents": agents_status,
                 }
                 if focus:
                     status["focus"] = focus

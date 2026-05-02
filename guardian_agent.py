@@ -29,6 +29,7 @@ class GuardianAgent(Agent):
         while self.running:
             await self._check_all_positions()
             self.check_count += 1
+            self.write_heartbeat({"check_count": self.check_count})
             await asyncio.sleep(5)  # Check toutes les 5s
     
     async def _check_all_positions(self):

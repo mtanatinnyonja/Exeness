@@ -33,7 +33,8 @@ class DecisionAgent(Agent):
             
             elif message and message.event_type == "risk_decision":
                 await self._process_risk_decision(message.payload)
-            
+
+            self.write_heartbeat()
             await asyncio.sleep(0.1)
     
     async def _process_risk_decision(self, risk_data: Dict[str, Any]):
