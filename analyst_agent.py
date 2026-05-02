@@ -16,6 +16,7 @@ from smart_strategies import build_strategies_context, get_session_score
 from market_context import analyze_market_context
 from learning_store import AgentMemory
 from settings import PRIMARY_TIMEFRAME, CONFIRM_TIMEFRAME, INSTRUMENTS
+from runtime_db import RuntimeStore
 
 _DATA_DIR = Path("data")
 _SCAN_FILE = _DATA_DIR / "scan_results.json"
@@ -29,13 +30,26 @@ class AnalystAgent(Agent):
         super().__init__("AnalystAgent")
         self.broker = build_broker()
         self.memory = AgentMemory()
-        self.instruments = instruments or INSTRUMENTS or ["EURUSDm", "XAUUSDm", "BTCUSDm"]
+        self.store = RuntimeStore()
+        self._instruments_override = instruments  # si passé manuellement
         self.cycle_count = 0
         self.last_analysis = {}  # instrument -> timestamp dernière analyse
+
+    def _get_instruments(self) -> List[str]:
+        """Lit les paires depuis les paramètres du dashboard (preferred_symbols)."""
+        settings = self.store.get_settings()
+        pref_raw = settings.get("preferred_symbols", "")
+        if pref_raw:
+            raw_str = str(pref_raw).strip().strip("[]").replace("'", "").replace('"', "")
+            pairs = [s.strip() for s in raw_str.split(",") if s.strip()]
+            if pairs:
+                return pairs
+        return self._instruments_override or INSTRUMENTS or ["EURUSDm", "XAUUSDm", "BTCUSDm"]
     
     async def on_startup(self):
         """Initialisation."""
-        self.log("INFO", f"Démarré. Instruments: {self.instruments}")
+        instruments = self._get_instruments()
+        self.log("INFO", f"Démarré. Instruments: {instruments}")
         await self.bus.subscribe(self.name, ["start_analysis", "market_tick"])
     
     async def run(self):
@@ -43,12 +57,13 @@ class AnalystAgent(Agent):
         _DATA_DIR.mkdir(exist_ok=True)
         while self.running:
             self.cycle_count += 1
+            instruments = self._get_instruments()  # relit les settings à chaque cycle
             candidates = []
             rejected = []
             trending = []
 
             # Analyser chaque instrument en rotation
-            for instrument in self.instruments:
+            for instrument in instruments:
                 result = await self._analyze_instrument(instrument)
                 if result:
                     if result.get("signal_direction") in ("BUY", "SELL"):
