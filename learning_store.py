@@ -5,7 +5,7 @@ Apprentissage des trades, des horaires, des patterns et du budget LLM local.
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 from settings import MEMORY_FILE, TRADES_FILE, DAILY_TOKEN_BUDGET
 
@@ -46,7 +46,15 @@ class AgentMemory:
             "last_ai_insights": [],
             "session_log": [],
             "error_log": [],
+            "last_ai_exchange": {},
         })
+
+    def get_last_ai_exchange(self) -> Dict:
+        return self.memory.get("last_ai_exchange", {})
+
+    def update_last_ai_exchange(self, exchange: Dict):
+        self.memory["last_ai_exchange"] = exchange or {}
+        self.save()
 
     def _migrate_legacy_keys(self):
         if "api_calls_today" in self.memory and "llm_calls_today" not in self.memory:
@@ -281,6 +289,31 @@ class AgentMemory:
         if total == 0:
             return 0.0
         return (self.memory.get("winning_trades", 0) / total) * 100
+
+    def get_trades_started_today(self) -> int:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        return sum(1 for trade in self.trades if str(trade.get("timestamp", "")).startswith(today))
+
+    def _parse_trade_timestamp(self, ts: str):
+        try:
+            dt = datetime.fromisoformat(ts)
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc)
+        except Exception:
+            return None
+
+    def get_recent_trade_count(self, minutes: int = 30) -> int:
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+        count = 0
+        for trade in self.trades:
+            ts = trade.get("timestamp", "")
+            dt = self._parse_trade_timestamp(ts)
+            if dt is None:
+                continue
+            if dt >= cutoff:
+                count += 1
+        return count
 
     def get_best_patterns(self) -> List[Dict]:
         patterns = []

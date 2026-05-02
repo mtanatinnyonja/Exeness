@@ -24,6 +24,10 @@ from smart_strategies import (
 )
 from telegram_notifier import TelegramNotifier
 from market_protection import run_all_protections
+from circuit_breaker import CircuitBreaker
+from dynamic_risk_manager import DynamicRiskManager
+from audit_logger import get_audit_logger
+from performance_tracker import PerformanceTracker
 
 _status_rotation_idx = 0
 
@@ -36,6 +40,10 @@ class TradeOrchestrator:
         self.agent = TradingAgent(self.broker, self.memory, self.store)
         self.calendar = EconomicCalendar()
         self.telegram = TelegramNotifier()
+        self.circuit_breaker = CircuitBreaker()
+        self.risk_manager = DynamicRiskManager()
+        self.audit = get_audit_logger()
+        self.performance = PerformanceTracker()
         self.last_signal_time = {}
         self._last_scan = {"mode": "unknown", "candidates": [], "rejected": [], "selected": []}
 
@@ -277,6 +285,13 @@ class TradeOrchestrator:
             self.memory.log_session(f"⏸️ Marché fermé - cycle ignoré | {market_status.get('reason', 'pas de cotation récente')}")
             return
 
+        # Check circuit breaker
+        if not self.circuit_breaker.can_trade():
+            cb_status = self.circuit_breaker.get_status()
+            self.memory.log_session(f"🛑 CIRCUIT BREAKER ACTIF: {cb_status.get('reason')} | Pause jusqu'à {cb_status.get('pause_until')}")
+            self.audit.log_risk_event("circuit_breaker_active", cb_status.get('reason'), cb_status)
+            return
+
         try:
             account = self.broker.get_account_summary()
             open_positions = self.broker.get_open_positions()
@@ -306,13 +321,15 @@ class TradeOrchestrator:
         if daily_loss_limit < 0 and today_pnl <= daily_loss_limit:
             self.memory.log_session(f"🛑 Perte journalière limite atteinte: ${today_pnl:.2f}")
             self._close_all_positions(open_positions, "limite de perte journalière")
+            self.circuit_breaker.check_daily_loss_exceeded(today_pnl)
+            self.audit.log_risk_event("daily_loss_exceeded", f"Perte jour ${today_pnl:.2f} <= limite ${daily_loss_limit:.2f}", {"daily_pnl": today_pnl, "limit": daily_loss_limit})
             try:
                 self.telegram.notify_daily_loss_limit(today_pnl, daily_loss_limit)
             except Exception:
                 pass
             return
         # Pas d'objectif journalier fixe: on trade tant que le money management est respecté
-        daily_target = float(runtime_settings.get('daily_target', DAILY_TARGET) or 0)
+        daily_target = float(settings.get('daily_target', DAILY_TARGET) or 0)
         if daily_target > 0 and today_pnl >= daily_target:
             self.memory.log_session(f"🎯 Objectif jour atteint: +${today_pnl:.2f} / ${daily_target:.2f} — pause")
             return
@@ -803,7 +820,7 @@ class TradeOrchestrator:
             "runtime_mode": "local-only",
             "live_snapshot": live_snapshot,
             "trending_pairs": trending_pairs,
-            "last_ai_exchange": self.agent.get_last_exchange(),
+            "last_ai_exchange": self.agent.get_last_exchange() or self.memory.get_last_ai_exchange(),
             "economic_calendar": self._get_calendar_summary(),
             "pro_strategies": self._get_strategies_summary(active_symbols, positions),
             "market_protections": self._get_protections_summary(active_symbols),
