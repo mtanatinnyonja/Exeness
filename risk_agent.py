@@ -55,6 +55,7 @@ class RiskAgent(Agent):
         """Évalue le risque d'un signal et décide approuver/bloquer."""
         instrument = signal_data.get("instrument", "?")
         direction = signal_data.get("direction", "?")
+        signal_id = signal_data.get("signal_id", "")
         
         try:
             score = int(signal_data.get("score", 0) or 0)
@@ -65,6 +66,7 @@ class RiskAgent(Agent):
                     {
                         "instrument": instrument,
                         "approved": False,
+                        "signal_id": signal_id,
                         "reason": f"Score insuffisant: {score}/5",
                     }
                 )
@@ -80,6 +82,7 @@ class RiskAgent(Agent):
                     {
                         "instrument": instrument,
                         "approved": False,
+                        "signal_id": signal_id,
                         "reason": f"Spread trop élevé: {spread_signal:.1f}p > {spread_limit:.1f}p",
                     }
                 )
@@ -94,6 +97,7 @@ class RiskAgent(Agent):
                     {
                         "instrument": instrument,
                         "approved": False,
+                        "signal_id": signal_id,
                         "reason": "Conflit H1/M15",
                     }
                 )
@@ -112,6 +116,7 @@ class RiskAgent(Agent):
                     {
                         "instrument": instrument,
                         "approved": False,
+                        "signal_id": signal_id,
                         "reason": f"RR insuffisant: {rr:.2f} < {self.min_rr}",
                     }
                 )
@@ -126,6 +131,7 @@ class RiskAgent(Agent):
                     {
                         "instrument": instrument,
                         "approved": False,
+                        "signal_id": signal_id,
                         "reason": f"Qualité insuffisante: {quality_score:.2f} < 0.40",
                     }
                 )
@@ -142,6 +148,7 @@ class RiskAgent(Agent):
                         {
                             "instrument": instrument,
                             "approved": False,
+                            "signal_id": signal_id,
                             "reason": f"News: {news_check['reason']}"
                         }
                     )
@@ -168,6 +175,7 @@ class RiskAgent(Agent):
                         {
                             "instrument": instrument,
                             "approved": False,
+                            "signal_id": signal_id,
                             "reason": f"Protections: {'; '.join(blocks)}"
                         }
                     )
@@ -212,6 +220,7 @@ class RiskAgent(Agent):
                 {
                     "instrument": instrument,
                     "approved": True,
+                    "signal_id": signal_id,
                     "risk_score": risk_score,
                     "approved_at": asyncio.get_event_loop().time(),
                     "sl_pips": sl_pips,

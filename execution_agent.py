@@ -308,15 +308,4 @@ class ExecutionAgent(Agent):
         except Exception as e:
             self.log("ERROR", f"{instrument}: Impossible fermer: {str(e)[:100]}")
 
-    async def _tighten_sl(self, data: Dict[str, Any]):
-        """Resserre le SL sur une position (breakeven ou trailing)."""
-        instrument = data.get("instrument", "?")
-        new_sl = data.get("new_sl")
-        if not new_sl:
-            return
-        try:
-            result = self.broker.modify_sl(instrument, new_sl)
-            if result:
-                self.log("INFO", f"{instrument}: SL déplacé → {new_sl:.5f} (trailing/breakeven)")
-        except Exception as e:
-            self.log("ERROR", f"{instrument}: Modify SL: {str(e)[:80]}")
+

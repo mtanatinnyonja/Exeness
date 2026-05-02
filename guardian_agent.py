@@ -24,7 +24,7 @@ class GuardianAgent(Agent):
     async def on_startup(self):
         """Initialisation."""
         self.log("INFO", "Démarré. Surveillance en continu...")
-        await self.bus.subscribe(self.name, ["trade_opened", "position_alert"])
+        await self.bus.subscribe(self.name, [])
     
     async def run(self):
         """Boucle autonome — surveille positions en continu."""

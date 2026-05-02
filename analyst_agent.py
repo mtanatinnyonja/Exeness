@@ -142,6 +142,7 @@ class AnalystAgent(Agent):
                     recipient="*",  # Broadcast
                     event_type="signal",
                     payload={
+                        "signal_id": f"{instrument}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}",
                         "instrument": instrument,
                         "direction": direction,
                         "score": score,

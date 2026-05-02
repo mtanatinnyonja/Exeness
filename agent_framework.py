@@ -64,6 +64,8 @@ class MessageBus:
             # Direct si recipient spécifié
             if message.recipient in self.queues:
                 await self.queues[message.recipient].put(message)
+            else:
+                self.logger.warning(f"Message perdu: destinataire '{message.recipient}' introuvable (de {message.sender}, événement '{message.event_type}')")
     
     async def receive(self, agent_name: str, timeout: float = 1.0) -> Optional[Message]:
         """Reçoit un message avec timeout."""

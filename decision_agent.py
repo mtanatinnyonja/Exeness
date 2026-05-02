@@ -39,12 +39,14 @@ class DecisionAgent(Agent):
                 instrument = message.payload.get("instrument", "?")
                 now_utc = datetime.now(timezone.utc)
                 if instrument in self.pending_signals:
-                    self.log("INFO", f"signal remplacé pour {instrument}")
-                self.pending_signals[instrument] = {
-                    "payload": dict(message.payload),
-                    "timestamp": now_utc,
-                }
-                self.log("DEBUG", f"{instrument}: Signal en attente d'approval risque")
+                    self.log("INFO", f"signal ignoré pour {instrument} — signal déjà en attente")
+                else:
+                    self.pending_signals[instrument] = {
+                        "payload": dict(message.payload),
+                        "signal_id": message.payload.get("signal_id", ""),
+                        "timestamp": now_utc,
+                    }
+                    self.log("DEBUG", f"{instrument}: Signal en attente d'approval risque")
             
             elif message and message.event_type == "risk_decision":
                 await self._process_risk_decision(message.payload)
@@ -79,7 +81,15 @@ class DecisionAgent(Agent):
         if instrument not in self.pending_signals:
             return
 
-        signal_item = self.pending_signals.pop(instrument)
+        # Vérifier que la décision de risque correspond bien au signal en attente
+        signal_item = self.pending_signals[instrument]
+        pending_signal_id = signal_item.get("signal_id", "")
+        incoming_signal_id = risk_data.get("signal_id", "")
+        if pending_signal_id and incoming_signal_id and pending_signal_id != incoming_signal_id:
+            self.log("WARN", f"{instrument}: risk_decision ignoré (signal_id mismatch)")
+            return
+
+        self.pending_signals.pop(instrument)
         signal_data = signal_item.get("payload", {})
         ts = signal_item.get("timestamp")
         if not isinstance(ts, datetime):
