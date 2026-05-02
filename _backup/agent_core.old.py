@@ -28,17 +28,35 @@ from settings import (
     MAX_LLM_CALLS_PER_DAY, DAILY_TOKEN_BUDGET,
     ONLY_ALLOW_LOCAL_LLM, PRIMARY_TIMEFRAME, CONFIRM_TIMEFRAME,
     DAILY_LOSS_LIMIT, LLM_FALLBACK_TECHNICAL,
+    LLM_ENABLED, LLM_AS_FINAL_VALIDATOR,
+    ENABLE_SIGNAL_QUALITY_FILTER, SIGNAL_QUALITY_MIN_SCORE,
+    SIGNAL_QUALITY_MIN_BIAS, ENABLE_MARKET_CONTEXT,
+    MAX_TRADES_PER_DAY, TRADE_COOLDOWN_MINUTES,
+    ENABLE_HUMAN_LIKE_MODE, HUMAN_LIKE_MIN_SCORE,
+    HUMAN_LIKE_MIN_BIAS, HUMAN_LIKE_MAX_RECENT_TRADES,
+    HUMAN_LIKE_TARGET_TRADES_PER_DAY, HUMAN_LIKE_MIN_TRADES_PER_DAY,
+    ENABLE_AGENT_COMMUNICATION_MODE,
 )
 from signal_engine import (
     calculate_signal_score, build_price_action_description, _MIN_CANDLES,
 )
 from market_protection import run_all_protections
+from market_context import analyze_market_context
+from signal_filter import filter_signal_quality
+from trade_planner import plan_trade_idea
+from agent_communication import (
+    build_analyst_prompt as build_analyst_conversation_prompt,
+    build_risk_prompt as build_risk_conversation_prompt,
+    build_decider_prompt as build_decider_conversation_prompt,
+    build_reviewer_prompt,
+)
 from smart_strategies import (
     get_session_score, calculate_htf_bias, get_smart_money_context,
     build_strategies_context, check_correlation_risk,
 )
 from economic_calendar import EconomicCalendar
 from runtime_db import RuntimeStore
+from audit_logger import get_audit_logger
 
 
 PROMPT_ANALYSTE = """Tu es l'ANALYSTE technique. Lis la structure price action, identifie le régime et le setup.
@@ -73,6 +91,7 @@ class TradingAgent:
         self.store = store
         self.calendar = EconomicCalendar()
         self.provider = "ollama"
+        self.audit = get_audit_logger()
 
         # State for dashboard / debug
         self.last_prompt = ""
@@ -93,6 +112,21 @@ class TradingAgent:
         self.min_confidence = float(settings.get("llm_min_confidence", LLM_MIN_CONFIDENCE))
         self.max_calls = int(settings.get("max_llm_calls_per_day", MAX_LLM_CALLS_PER_DAY))
         self.token_budget = int(settings.get("daily_token_budget", DAILY_TOKEN_BUDGET))
+        self.llm_enabled = bool(settings.get("enable_llm", LLM_ENABLED))
+        self.llm_final_validator = bool(settings.get("llm_as_final_validator", LLM_AS_FINAL_VALIDATOR))
+        self.signal_filter_enabled = bool(settings.get("enable_signal_quality_filter", ENABLE_SIGNAL_QUALITY_FILTER))
+        self.signal_quality_min_score = int(settings.get("signal_quality_min_score", SIGNAL_QUALITY_MIN_SCORE))
+        self.signal_quality_min_bias = float(settings.get("signal_quality_min_bias", SIGNAL_QUALITY_MIN_BIAS))
+        self.market_context_enabled = bool(settings.get("enable_market_context", ENABLE_MARKET_CONTEXT))
+        self.max_trades_per_day = int(settings.get("max_trades_per_day", MAX_TRADES_PER_DAY))
+        self.trade_cooldown_minutes = int(settings.get("trade_cooldown_minutes", TRADE_COOLDOWN_MINUTES))
+        self.human_like_mode = bool(settings.get("enable_human_like_mode", ENABLE_HUMAN_LIKE_MODE))
+        self.human_like_min_score = int(settings.get("human_like_min_score", HUMAN_LIKE_MIN_SCORE))
+        self.human_like_min_bias = float(settings.get("human_like_min_bias", HUMAN_LIKE_MIN_BIAS))
+        self.human_like_max_recent_trades = int(settings.get("human_like_max_recent_trades", HUMAN_LIKE_MAX_RECENT_TRADES))
+        self.human_like_target_trades_per_day = int(settings.get("human_like_target_trades_per_day", HUMAN_LIKE_TARGET_TRADES_PER_DAY))
+        self.human_like_min_trades_per_day = int(settings.get("human_like_min_trades_per_day", HUMAN_LIKE_MIN_TRADES_PER_DAY))
+        self.agent_communication_enabled = bool(settings.get("enable_agent_communication_mode", ENABLE_AGENT_COMMUNICATION_MODE))
 
     # ═══════════════════════════════════════════════════════════════════
     # PUBLIC API
@@ -111,6 +145,38 @@ class TradingAgent:
         if ctx is None:
             return self._wait("Données insuffisantes pour analyser")
 
+        if self.market_context_enabled:
+            ctx["market_context"] = analyze_market_context(ctx["candles_h1"], instrument)
+        else:
+            ctx["market_context"] = {"category": "unknown", "reason": "désactivé"}
+
+        ctx["trades_today"] = self.memory.get_trades_started_today()
+        ctx["recent_trades"] = self.memory.get_recent_trade_count(self.trade_cooldown_minutes)
+
+        ctx["trade_plan"] = plan_trade_idea(
+            ctx,
+            open_positions,
+            {
+                "human_like_min_score": self.human_like_min_score,
+                "human_like_min_bias": self.human_like_min_bias,
+                "max_open_positions": int(self.store.get_settings().get("max_open_positions", 3)),
+                "max_trades_per_day": self.max_trades_per_day,
+                "trades_today": ctx["trades_today"],
+                "recent_trades": ctx["recent_trades"],
+                "max_recent_trades": self.human_like_max_recent_trades,
+                "target_trades_per_day": self.human_like_target_trades_per_day,
+                "min_trades_per_day": self.human_like_min_trades_per_day,
+            },
+        )
+
+        plan = ctx["trade_plan"]
+        self.memory.log_session(
+            f"🧭 {instrument}: Planner → {plan['direction']} conf={plan['confidence']:.2f} "
+            f"bloqué={plan['is_blocking']} notes={';'.join(plan.get('notes', []))}"
+        )
+        if self.human_like_mode and plan["is_blocking"]:
+            return self._wait(f"Planner: {plan['reasoning']}")
+
         # Step 2: Check hard blocks (no LLM needed)
         if ctx["protections"]["blocked"]:
             blocks = ctx["protections"]["hard_blocks"]
@@ -125,6 +191,11 @@ class TradingAgent:
             f"📊 {instrument}: score={signal['score']}/5 dir={signal.get('direction', 'WAIT')} "
             f"regime={details.get('market_regime', '?')} spread={ctx['spread']:.1f}p"
         )
+        self.memory.log_session(
+            f"🌍 {instrument}: contexte marché={ctx['market_context']['category']} "
+            f"({ctx['market_context']['reason']})"
+        )
+
         session = ctx["session"]
         self.memory.log_session(f"🕐 {instrument}: {session['label']} (qualité={session['instrument_quality']})")
 
@@ -145,10 +216,34 @@ class TradingAgent:
                 self.memory.log_session(f"🛡️ {instrument}: setup bloqué par la mémoire")
                 return self._wait("Setup bloqué par la mémoire locale")
 
+        if self.signal_filter_enabled:
+            filter_result = filter_signal_quality(
+                ctx["signal"],
+                ctx.get("signal_confirm"),
+                ctx["market_context"],
+                len(open_positions),
+                self.memory,
+                {
+                    "min_signal_score": self.signal_quality_min_score,
+                    "min_signal_bias": self.signal_quality_min_bias,
+                    "max_open_positions": int(self.store.get_settings().get("max_open_positions", 3)),
+                    "max_trades_per_day": self.max_trades_per_day,
+                    "trade_cooldown_minutes": self.trade_cooldown_minutes,
+                },
+            )
+            if filter_result["blocked"]:
+                self.memory.log_session(
+                    f"🚫 {instrument}: signal bloqué par filtre qualité — {filter_result['reason']}"
+                )
+                return self._wait(f"Filtre qualité signal: {filter_result['reason']}")
+
         # ═══ MULTI-AGENT PIPELINE ═══
 
         # Agent 1: ANALYSTE — identifie le setup
-        analyste_prompt = self._build_analyste_prompt(instrument, ctx)
+        if self.agent_communication_enabled:
+            analyste_prompt = build_analyst_conversation_prompt(instrument, ctx)
+        else:
+            analyste_prompt = self._build_analyste_prompt(instrument, ctx)
         self.last_prompt = analyste_prompt
         self.memory.log_session(f"📊 {instrument}: Agent Analyste en réflexion...")
 
@@ -172,15 +267,21 @@ class TradingAgent:
         if analyste_dir == "NEUTRAL" or analyste_force < 2:
             self.last_raw_response = analyste_raw
             self.last_parsed_response = {"analyste": analyste_json}
+            self._persist_last_exchange()
             return self._wait(f"Analyste: pas de setup clair ({analyste_dir} force={analyste_force})")
 
         # Agent 2: RISK MANAGER — évalue les risques
-        risk_prompt = self._build_risk_prompt(instrument, ctx, analyste_json)
+        if self.agent_communication_enabled:
+            risk_prompt = build_risk_conversation_prompt(instrument, ctx, analyste_json)
+        else:
+            risk_prompt = self._build_risk_prompt(instrument, ctx, analyste_json)
         self.memory.log_session(f"🛡️ {instrument}: Agent Risk Manager en réflexion...")
 
         risk_raw = self._call_ollama(risk_prompt, instrument, PROMPT_RISK)
         if risk_raw is None:
             self.last_raw_response = analyste_raw
+            self.last_parsed_response = {"analyste": analyste_json}
+            self._persist_last_exchange()
             return self._wait("Risk Manager indisponible — WAIT par sécurité")
 
         risk_json = self._extract_json(risk_raw) or {}
@@ -195,15 +296,21 @@ class TradingAgent:
         if not approved or risk_score >= 8:
             self.last_raw_response = f"ANALYSTE:\n{analyste_raw}\n\nRISK:\n{risk_raw}"
             self.last_parsed_response = {"analyste": analyste_json, "risk": risk_json}
+            self._persist_last_exchange()
             return self._wait(f"Risk Manager bloque (risque={risk_score}/10): {risk_json.get('risk_notes', '')[:100]}")
 
         # Agent 3: DÉCIDEUR — arbitre final
-        decideur_prompt = self._build_decideur_prompt(instrument, ctx, analyste_json, risk_json)
+        if self.agent_communication_enabled:
+            decideur_prompt = build_decider_conversation_prompt(instrument, ctx, analyste_json, risk_json)
+        else:
+            decideur_prompt = self._build_decideur_prompt(instrument, ctx, analyste_json, risk_json)
         self.memory.log_session(f"⚖️ {instrument}: Agent Décideur en réflexion...")
 
         decideur_raw = self._call_ollama(decideur_prompt, instrument, PROMPT_DECIDEUR)
         if decideur_raw is None:
             self.last_raw_response = f"ANALYSTE:\n{analyste_raw}\n\nRISK:\n{risk_raw}"
+            self.last_parsed_response = {"analyste": analyste_json, "risk": risk_json}
+            self._persist_last_exchange()
             return self._wait("Décideur indisponible — WAIT par sécurité")
 
         self.last_raw_response = f"ANALYSTE:\n{analyste_raw}\n\nRISK:\n{risk_raw}\n\nDÉCIDEUR:\n{decideur_raw}"
@@ -220,6 +327,24 @@ class TradingAgent:
             "risk": risk_json,
             "decideur": decision,
         }
+        self._persist_last_exchange()
+
+        if self.agent_communication_enabled:
+            reviewer_prompt = build_reviewer_prompt(instrument, ctx, analyste_json, risk_json, decision)
+            reviewer_raw = self._call_ollama(reviewer_prompt, instrument, PROMPT_DECIDEUR)
+            if reviewer_raw:
+                reviewer_json = self._extract_json(reviewer_raw) or {}
+                if reviewer_json.get("allow") is False:
+                    reason = reviewer_json.get("reasoning", "relecteur bloque")
+                    self.memory.log_session(f"📝 Relecteur → {instrument}: bloque | {reason}")
+                    self.last_raw_response += f"\n\nRELECTEUR:\n{reviewer_raw}"
+                    self.last_parsed_response["reviewer"] = reviewer_json
+                    return self._wait(f"Relecteur bloque: {reason}")
+                self.last_parsed_response["reviewer"] = reviewer_json
+                self.memory.log_session(
+                    f"📝 Relecteur → {instrument}: allow={reviewer_json.get('allow')} "
+                    f"reason={reviewer_json.get('reasoning', '')[:120]}"
+                )
 
         self.memory.log_session(
             f"⚖️ Décideur → {instrument}: {decision['decision']} "
@@ -245,7 +370,18 @@ class TradingAgent:
         return decision
 
     def get_last_exchange(self) -> Dict:
-        return {
+        if self.last_prompt or self.last_raw_response or self.last_parsed_response:
+            return {
+                "instrument": self.last_analysis_instrument,
+                "timestamp": self.last_analysis_timestamp,
+                "prompt": self.last_prompt,
+                "raw_response": self.last_raw_response,
+                "parsed_response": self.last_parsed_response,
+                "provider": self.provider,
+                "model": self.model,
+                "llm_healthy": self._llm_healthy,
+            }
+        return self.memory.get_last_ai_exchange() or {
             "instrument": self.last_analysis_instrument,
             "timestamp": self.last_analysis_timestamp,
             "prompt": self.last_prompt,
@@ -255,6 +391,12 @@ class TradingAgent:
             "model": self.model,
             "llm_healthy": self._llm_healthy,
         }
+
+    def _persist_last_exchange(self):
+        try:
+            self.memory.update_last_ai_exchange(self.get_last_exchange())
+        except Exception:
+            pass
 
     def monitor_position(self, position: Dict, account: Dict) -> Dict:
         """
@@ -461,14 +603,25 @@ Balance:{account.get('balance',0):.0f}$ Positions:{account.get('open_trades',0)}
         if len(strat_text) > 400:
             strat_text = strat_text[:400] + "..."
 
+        market_context = ctx.get("market_context", {})
+        plan_text = ""
+        if ctx.get("trade_plan"):
+            plan = ctx["trade_plan"]
+            plan_text = (
+                f"Plan:{plan.get('direction','WAIT')} conf={plan.get('confidence',0):.2f} "
+                f"bloqué={plan.get('is_blocking')} notes={';'.join(plan.get('notes', []))}"
+            )
+
         return {
             "header": (
                 f"{instrument} Score:{signal['score']}/5 Dir:{signal.get('direction','WAIT')} "
                 f"Regime:{details.get('market_regime','?')} "
+                f"Market:{market_context.get('category','?')} "
                 f"RSI:{details.get('rsi',50):.0f} Spread:{ctx['spread']:.1f}p ATR:{signal.get('atr_pips',0)}p "
                 f"Supp:{details.get('support',0)} Res:{details.get('resistance',0)} "
                 f"RR_buy:{details.get('rr_buy',0)} RR_sell:{details.get('rr_sell',0)}"
             ),
+            "plan": plan_text,
             "confirm": confirm_text,
             "pa": pa_text,
             "strat": strat_text,
@@ -480,7 +633,8 @@ Balance:{account.get('balance',0):.0f}$ Positions:{account.get('open_trades',0)}
 
     def _build_analyste_prompt(self, instrument: str, ctx: Dict) -> str:
         c = self._compact_context(instrument, ctx)
-        return f"""{c['header']}
+        plan_section = f"PLAN: {c['plan']}\n\n" if c.get('plan') else ""
+        return f"""{c['header']}\n{plan_section}
 {c['confirm']}
 
 PRICE ACTION:
@@ -510,6 +664,36 @@ RISK: {'APPROUVÉ' if risk.get('approved') else 'BLOQUÉ'} risque={risk.get('ris
 
 {c['account']}"""
 
+    def _build_final_validator_prompt(self, instrument: str, ctx: Dict, decision: Dict) -> str:
+        c = self._compact_context(instrument, ctx)
+        return f"""Valide la décision finale pour {instrument}.
+
+CONTEXTE MARCHÉ:
+{c['header']}
+Contexte marché: {ctx['market_context']['category']} — {ctx['market_context']['reason']}
+
+DÉCISION CANDIDATE:
+Décision: {decision['decision']}
+Confiance: {decision['confidence']:.2f}
+SL: {decision['stop_loss_pips']}p TP: {decision['take_profit_pips']}p
+Reasoning: {decision.get('reasoning','')}
+
+Réponds uniquement en JSON: {{"allow":true/false,"reasoning":"court"}}"""
+
+    def _llm_final_validation(self, instrument: str, decision: Dict, ctx: Dict) -> Optional[Dict]:
+        prompt = self._build_final_validator_prompt(instrument, ctx, decision)
+        raw = self._call_ollama(prompt, instrument, PROMPT_DECIDEUR)
+        if raw is None:
+            self.memory.log_session(f"🧠 {instrument}: validateur LLM final indisponible")
+            return None
+        parsed = self._extract_json(raw) or {}
+        if "allow" not in parsed:
+            return None
+        return {
+            "allow": bool(parsed.get("allow", False)),
+            "reasoning": str(parsed.get("reasoning", "")),
+        }
+
     # ═══════════════════════════════════════════════════════════════════
     # LLM COMMUNICATION
     # ═══════════════════════════════════════════════════════════════════
@@ -535,6 +719,10 @@ RISK: {'APPROUVÉ' if risk.get('approved') else 'BLOQUÉ'} risque={risk.get('ris
 
     def _call_ollama(self, prompt: str, instrument: str, system_prompt: str = "") -> Optional[str]:
         """Appel LLM local avec 1 retry automatique après 5s si échec."""
+        if not self.llm_enabled:
+            self.memory.log_session(f"🔒 {instrument}: LLM désactivé par configuration")
+            self._llm_healthy = False
+            return None
         if requests is None:
             self.memory.record_error("agent", "package requests absent")
             self._llm_healthy = False
@@ -726,6 +914,14 @@ RISK: {'APPROUVÉ' if risk.get('approved') else 'BLOQUÉ'} risque={risk.get('ris
     def _validate(self, instrument: str, decision: Dict, ctx: Dict) -> Dict:
         if decision["decision"] == "WAIT":
             return decision
+
+        if self.llm_final_validator and self.llm_enabled:
+            validator = self._llm_final_validation(instrument, decision, ctx)
+            if validator is not None and not validator.get("allow", True):
+                self.memory.log_session(
+                    f"🧠 {instrument}: LLM final valideur bloque → {validator.get('reasoning','aucune raison')}"
+                )
+                return self._wait(f"LLM final bloque: {validator.get('reasoning','aucune raison')}")
 
         # Confidence check — le fallback technique a confidence=0.40,
         # ce qui est < min_confidence (0.60) donc il sera bloqué ici

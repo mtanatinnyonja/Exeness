@@ -19,6 +19,7 @@ if _env_path.exists():
 
 # === BROKER ===
 BROKER = "mt5"  # "mt5" | "demo"
+PAPER_TRADING = False
 
 # === META TRADER 5 / EXNESS ===
 MT5_TERMINAL_PATH = ""      # Exemple: C:/Program Files/MetaTrader 5/terminal64.exe
@@ -56,10 +57,30 @@ LLM_ANALYSIS_NOTES = os.getenv(
 LLM_MAX_CONTEXT_BARS = int(os.getenv("LLM_MAX_CONTEXT_BARS", "60"))
 ONLY_ALLOW_LOCAL_LLM = True
 
-# === FALLBACK TECHNIQUE (si LLM indisponible) ===
+# === LLM et IA ===
+# Le système doit pouvoir fonctionner sans LLM.
+LLM_ENABLED = os.getenv("LLM_ENABLED", "true").strip().lower() == "true"
+LLM_AS_FINAL_VALIDATOR = os.getenv("LLM_AS_FINAL_VALIDATOR", "false").strip().lower() == "true"
 # True  = utilise les signaux techniques purs si Ollama plante (score >= 4 requis)
 # False = WAIT systématique — comportement original, plus conservateur
 LLM_FALLBACK_TECHNICAL = os.getenv("LLM_FALLBACK_TECHNICAL", "true").strip().lower() == "true"
+
+# === FILTRES DE SIGNAL ET CONTEXTE MARCHE ===
+ENABLE_SIGNAL_QUALITY_FILTER = os.getenv("ENABLE_SIGNAL_QUALITY_FILTER", "true").strip().lower() == "true"
+SIGNAL_QUALITY_MIN_SCORE = int(os.getenv("SIGNAL_QUALITY_MIN_SCORE", "2"))
+SIGNAL_QUALITY_MIN_BIAS = float(os.getenv("SIGNAL_QUALITY_MIN_BIAS", "0.5"))
+ENABLE_MARKET_CONTEXT = os.getenv("ENABLE_MARKET_CONTEXT", "true").strip().lower() == "true"
+MAX_TRADES_PER_DAY = int(os.getenv("MAX_TRADES_PER_DAY", "4"))
+TRADE_COOLDOWN_MINUTES = int(os.getenv("TRADE_COOLDOWN_MINUTES", "30"))
+
+# === MODE TRADER HUMAIN ET PLANIFICATION ===
+ENABLE_HUMAN_LIKE_MODE = os.getenv("ENABLE_HUMAN_LIKE_MODE", "false").strip().lower() == "true"
+HUMAN_LIKE_MIN_SCORE = int(os.getenv("HUMAN_LIKE_MIN_SCORE", "3"))
+HUMAN_LIKE_MIN_BIAS = float(os.getenv("HUMAN_LIKE_MIN_BIAS", "0.5"))
+HUMAN_LIKE_MAX_RECENT_TRADES = int(os.getenv("HUMAN_LIKE_MAX_RECENT_TRADES", "2"))
+HUMAN_LIKE_TARGET_TRADES_PER_DAY = int(os.getenv("HUMAN_LIKE_TARGET_TRADES_PER_DAY", "2"))
+HUMAN_LIKE_MIN_TRADES_PER_DAY = int(os.getenv("HUMAN_LIKE_MIN_TRADES_PER_DAY", "1"))
+ENABLE_AGENT_COMMUNICATION_MODE = os.getenv("ENABLE_AGENT_COMMUNICATION_MODE", "false").strip().lower() == "true"
 
 # === CAPITAL & RISK ===
 INITIAL_CAPITAL = 50.0
