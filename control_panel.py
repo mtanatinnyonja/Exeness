@@ -1903,23 +1903,116 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith('/api/status'):
             try:
                 from urllib.parse import urlparse, parse_qs
+                from datetime import datetime, timezone
                 from mt5_bridge import build_broker
                 from learning_store import AgentMemory
                 from circuit_breaker import CircuitBreaker
+                from runtime_db import RuntimeStore
+                from economic_calendar import EconomicCalendar
+                import settings as cfg
+
                 qs = parse_qs(urlparse(self.path).query)
                 focus = (qs.get('focus', [''])[0] or '').strip()
+
                 broker = build_broker()
                 memory = AgentMemory()
                 cb = CircuitBreaker()
-                account = broker.get_account_summary()
+                store = RuntimeStore()
+                calendar = EconomicCalendar()
+
+                # Calendar pause check
+                try:
+                    cal_pause = calendar.should_pause_trading("EURUSDm")
+                    cal_status = {
+                        "news_pause": cal_pause,
+                        "upcoming": [],
+                    }
+                except Exception:
+                    cal_status = {}
                 positions = broker.get_open_positions()
-                recent_trades = memory.get_recent_trades(10)
+                recent_trades = memory.get_recent_trades(20)
                 cb_status = cb.get_status()
+                runtime_settings = store.get_settings()
+
+                # P&L stats from memory
+                daily_pnl = memory.get_daily_pnl()
+                win_rate = memory.get_win_rate()  # already in %
+                all_trades = memory.get_recent_trades(1000)
+                total_trades = len(all_trades)
+                total_pnl = sum(t.get("pnl", 0) or 0 for t in all_trades if t.get("status") == "closed")
+                llm_calls_today = memory.get_llm_calls_today()
+
+                # Session log from memory
+                session_log = []
+
+                # Market open check (weekday + hour)
+                now = datetime.now(timezone.utc)
+                weekday = now.weekday()  # 0=Mon, 6=Sun
+                hour = now.hour
+                market_open = weekday < 5 and not (weekday == 4 and hour >= 22) and not (weekday == 6 and hour < 22)
+                market_status = {"reason": "MARCHÉ OUVERT" if market_open else "MARCHÉ FERMÉ (week-end)"}
+
+                account = broker.get_account_summary()
+                pref_raw = runtime_settings.get("preferred_symbols", "")
+                if pref_raw:
+                    raw_str = str(pref_raw).strip().strip("[]").replace("'", "").replace('"', "")
+                    active_symbols = [s.strip() for s in raw_str.split(",") if s.strip()]
+                else:
+                    active_symbols = list(getattr(cfg, "INSTRUMENTS", []))
+
+                # Live snapshot for first symbol
+                live_snapshot = {}
+                try:
+                    sym = focus or (active_symbols[0] if active_symbols else "EURUSDm")
+                    candles = broker.get_candles(sym, "H1", 60)
+                    if len(candles) >= 2:
+                        closes = [float(c["close"]) for c in candles[-30:]]
+                        last = candles[-1]
+                        prev = candles[-2]
+                        price_change_pct = ((last["close"] - prev["close"]) / prev["close"] * 100) if prev["close"] else 0
+                        live_snapshot = {
+                            "instrument": sym,
+                            "closes": closes,
+                            "price": last["close"],
+                            "price_change_pct": round(price_change_pct, 4),
+                            "spread": broker.get_spread_pips(sym) if hasattr(broker, "get_spread_pips") else 0,
+                        }
+                except Exception:
+                    pass
+
+                # Best patterns from memory
+                best_patterns = memory.get_best_patterns() if hasattr(memory, "get_best_patterns") else []
+
                 status = {
+                    # Market state
+                    "market_open": market_open,
+                    "market_status": market_status,
+                    # Account
                     "account": account,
                     "open_positions": positions,
                     "recent_trades": recent_trades,
+                    # Stats
+                    "daily_pnl": daily_pnl,
+                    "total_pnl": total_pnl,
+                    "win_rate": win_rate,
+                    "total_trades": total_trades,
+                    # Config
+                    "settings": runtime_settings,
+                    "ai_provider": f"Ollama {runtime_settings.get('local_llm_model', 'qwen2.5:3b')}",
+                    "active_symbols": active_symbols,
+                    "llm_calls_today": llm_calls_today,
+                    # Live data
+                    "live_snapshot": live_snapshot,
+                    "best_patterns": best_patterns,
+                    "session_log": session_log,
+                    # Modules
+                    "economic_calendar": cal_status,
                     "circuit_breaker": cb_status,
+                    "smart_scan": {"candidates": [], "rejected": []},
+                    "trending_pairs": [],
+                    "market_protections": {},
+                    "pro_strategies": {},
+                    # Agents status
                     "agents": [
                         {"name": "AnalystAgent", "status": "running"},
                         {"name": "RiskAgent", "status": "running"},
