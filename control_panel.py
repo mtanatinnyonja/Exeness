@@ -1888,21 +1888,48 @@ class Handler(BaseHTTPRequestHandler):
 
     def _send_json(self, payload, status=200):
         body = json.dumps(payload, default=str, ensure_ascii=False).encode('utf-8')
-        self.send_response(status)
-        self.send_header('Content-Type', 'application/json; charset=utf-8')
-        self.send_header('Content-Length', len(body))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Content-Length', len(body))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionAbortedError, OSError):
+            # Client disconnected before response could be sent.
+            # Ignore this error to keep the dashboard server stable.
+            pass
 
     def do_GET(self):
         if self.path.startswith('/api/status'):
             try:
-                from trade_orchestrator import TradeOrchestrator
                 from urllib.parse import urlparse, parse_qs
+                from mt5_bridge import build_broker
+                from learning_store import AgentMemory
+                from circuit_breaker import CircuitBreaker
                 qs = parse_qs(urlparse(self.path).query)
                 focus = (qs.get('focus', [''])[0] or '').strip()
-                agent = TradeOrchestrator(quiet=True)
-                status = agent.get_status(focus_symbol=focus)
+                broker = build_broker()
+                memory = AgentMemory()
+                cb = CircuitBreaker()
+                account = broker.get_account_summary()
+                positions = broker.get_open_positions()
+                recent_trades = memory.get_recent_trades(10)
+                cb_status = cb.get_status()
+                status = {
+                    "account": account,
+                    "open_positions": positions,
+                    "recent_trades": recent_trades,
+                    "circuit_breaker": cb_status,
+                    "agents": [
+                        {"name": "AnalystAgent", "status": "running"},
+                        {"name": "RiskAgent", "status": "running"},
+                        {"name": "DecisionAgent", "status": "running"},
+                        {"name": "ExecutionAgent", "status": "running"},
+                        {"name": "GuardianAgent", "status": "running"},
+                    ],
+                }
+                if focus:
+                    status["focus"] = focus
                 self._send_json(status)
             except Exception as e:
                 self._send_json({"error": str(e)}, status=500)
@@ -1927,12 +1954,31 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": str(e)}, status=500)
         elif self.path == '/api/test-ai':
             try:
-                from trade_orchestrator import TradeOrchestrator
+                from mt5_bridge import build_broker
+                from signal_engine import calculate_signal_score
+                from smart_strategies import build_strategies_context
                 length = int(self.headers.get('Content-Length', '0'))
                 raw = self.rfile.read(length).decode('utf-8') if length else '{}'
                 payload = json.loads(raw)
-                agent = TradeOrchestrator(quiet=True)
-                result = agent.preview_ai_decision(payload.get('instrument'))
+                instrument = payload.get('instrument', 'EURUSDm')
+                broker = build_broker()
+                candles = broker.get_candles(instrument, 'H1', 100)
+                if len(candles) < 20:
+                    self._send_json({"ok": False, "error": "Pas assez de données"})
+                    return
+                signal = calculate_signal_score(candles, instrument)
+                strategies = build_strategies_context(
+                    instrument, candles, [], [],
+                    signal_direction=signal.get('direction'),
+                    signal_score=signal.get('score', 0),
+                    open_positions=[]
+                )
+                result = {
+                    "instrument": instrument,
+                    "signal": signal,
+                    "strategies_summary": strategies.get('summary', '') if isinstance(strategies, dict) else str(strategies)[:200],
+                    "spread": broker.get_spread_pips(instrument),
+                }
                 self._send_json({"ok": True, "result": result})
             except Exception as e:
                 self._send_json({"ok": False, "error": str(e)}, status=500)

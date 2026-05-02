@@ -46,7 +46,15 @@ class AgentMemory:
             "last_ai_insights": [],
             "session_log": [],
             "error_log": [],
+            "last_ai_exchange": {},
         })
+
+    def get_last_ai_exchange(self) -> Dict:
+        return self.memory.get("last_ai_exchange", {})
+
+    def update_last_ai_exchange(self, exchange: Dict):
+        self.memory["last_ai_exchange"] = exchange or {}
+        self.save()
 
     def _migrate_legacy_keys(self):
         if "api_calls_today" in self.memory and "llm_calls_today" not in self.memory:
@@ -286,14 +294,22 @@ class AgentMemory:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         return sum(1 for trade in self.trades if str(trade.get("timestamp", "")).startswith(today))
 
+    def _parse_trade_timestamp(self, ts: str):
+        try:
+            dt = datetime.fromisoformat(ts)
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc)
+        except Exception:
+            return None
+
     def get_recent_trade_count(self, minutes: int = 30) -> int:
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
         count = 0
         for trade in self.trades:
             ts = trade.get("timestamp", "")
-            try:
-                dt = datetime.fromisoformat(ts)
-            except Exception:
+            dt = self._parse_trade_timestamp(ts)
+            if dt is None:
                 continue
             if dt >= cutoff:
                 count += 1

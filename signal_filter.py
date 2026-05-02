@@ -10,12 +10,16 @@ def _parse_iso_date(timestamp: str) -> Optional[datetime]:
     if not timestamp:
         return None
     try:
-        return datetime.fromisoformat(timestamp)
+        dt = datetime.fromisoformat(timestamp)
     except Exception:
         try:
-            return datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%S")
+            dt = datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%S")
         except Exception:
             return None
+
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def get_recent_trades_count(memory, minutes: int = 30) -> int:

@@ -56,6 +56,7 @@ from smart_strategies import (
 )
 from economic_calendar import EconomicCalendar
 from runtime_db import RuntimeStore
+from audit_logger import get_audit_logger
 
 
 PROMPT_ANALYSTE = """Tu es l'ANALYSTE technique. Lis la structure price action, identifie le régime et le setup.
@@ -90,6 +91,7 @@ class TradingAgent:
         self.store = store
         self.calendar = EconomicCalendar()
         self.provider = "ollama"
+        self.audit = get_audit_logger()
 
         # State for dashboard / debug
         self.last_prompt = ""
@@ -265,6 +267,7 @@ class TradingAgent:
         if analyste_dir == "NEUTRAL" or analyste_force < 2:
             self.last_raw_response = analyste_raw
             self.last_parsed_response = {"analyste": analyste_json}
+            self._persist_last_exchange()
             return self._wait(f"Analyste: pas de setup clair ({analyste_dir} force={analyste_force})")
 
         # Agent 2: RISK MANAGER — évalue les risques
@@ -277,6 +280,8 @@ class TradingAgent:
         risk_raw = self._call_ollama(risk_prompt, instrument, PROMPT_RISK)
         if risk_raw is None:
             self.last_raw_response = analyste_raw
+            self.last_parsed_response = {"analyste": analyste_json}
+            self._persist_last_exchange()
             return self._wait("Risk Manager indisponible — WAIT par sécurité")
 
         risk_json = self._extract_json(risk_raw) or {}
@@ -291,6 +296,7 @@ class TradingAgent:
         if not approved or risk_score >= 8:
             self.last_raw_response = f"ANALYSTE:\n{analyste_raw}\n\nRISK:\n{risk_raw}"
             self.last_parsed_response = {"analyste": analyste_json, "risk": risk_json}
+            self._persist_last_exchange()
             return self._wait(f"Risk Manager bloque (risque={risk_score}/10): {risk_json.get('risk_notes', '')[:100]}")
 
         # Agent 3: DÉCIDEUR — arbitre final
@@ -303,6 +309,8 @@ class TradingAgent:
         decideur_raw = self._call_ollama(decideur_prompt, instrument, PROMPT_DECIDEUR)
         if decideur_raw is None:
             self.last_raw_response = f"ANALYSTE:\n{analyste_raw}\n\nRISK:\n{risk_raw}"
+            self.last_parsed_response = {"analyste": analyste_json, "risk": risk_json}
+            self._persist_last_exchange()
             return self._wait("Décideur indisponible — WAIT par sécurité")
 
         self.last_raw_response = f"ANALYSTE:\n{analyste_raw}\n\nRISK:\n{risk_raw}\n\nDÉCIDEUR:\n{decideur_raw}"
@@ -319,6 +327,7 @@ class TradingAgent:
             "risk": risk_json,
             "decideur": decision,
         }
+        self._persist_last_exchange()
 
         if self.agent_communication_enabled:
             reviewer_prompt = build_reviewer_prompt(instrument, ctx, analyste_json, risk_json, decision)
@@ -361,7 +370,18 @@ class TradingAgent:
         return decision
 
     def get_last_exchange(self) -> Dict:
-        return {
+        if self.last_prompt or self.last_raw_response or self.last_parsed_response:
+            return {
+                "instrument": self.last_analysis_instrument,
+                "timestamp": self.last_analysis_timestamp,
+                "prompt": self.last_prompt,
+                "raw_response": self.last_raw_response,
+                "parsed_response": self.last_parsed_response,
+                "provider": self.provider,
+                "model": self.model,
+                "llm_healthy": self._llm_healthy,
+            }
+        return self.memory.get_last_ai_exchange() or {
             "instrument": self.last_analysis_instrument,
             "timestamp": self.last_analysis_timestamp,
             "prompt": self.last_prompt,
@@ -371,6 +391,12 @@ class TradingAgent:
             "model": self.model,
             "llm_healthy": self._llm_healthy,
         }
+
+    def _persist_last_exchange(self):
+        try:
+            self.memory.update_last_ai_exchange(self.get_last_exchange())
+        except Exception:
+            pass
 
     def monitor_position(self, position: Dict, account: Dict) -> Dict:
         """
