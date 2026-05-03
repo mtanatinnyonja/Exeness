@@ -1353,12 +1353,12 @@ function populateSettings(data) {
   const settings = data.settings || {};
   document.getElementById('setting-check-interval').value = settings.check_interval_minutes || 15;
   document.getElementById('setting-risk').value = settings.max_risk_per_trade || 0.02;
-  document.getElementById('setting-daily-target').value = coalesce(settings.daily_target, 2.0);
-  document.getElementById('setting-daily-loss').value = coalesce(settings.daily_loss_limit, -5.0);
-  document.getElementById('setting-max-positions').value = settings.max_open_positions || 2;
+  document.getElementById('setting-daily-target').value = coalesce(settings.daily_target, 5.0);
+  document.getElementById('setting-daily-loss').value = coalesce(settings.daily_loss_limit, -10.0);
+  document.getElementById('setting-max-positions').value = settings.max_open_positions || 1;
   document.getElementById('setting-local-model').value = settings.local_llm_model || 'qwen2.5:3b';
   document.getElementById('setting-local-endpoint').value = settings.local_llm_endpoint || 'http://127.0.0.1:11434/api/generate';
-  document.getElementById('setting-local-timeout').value = coalesce(settings.local_llm_timeout, 120);
+  document.getElementById('setting-local-timeout').value = coalesce(settings.local_llm_timeout, 300);
   document.getElementById('setting-analysis-mode').value = settings.llm_analysis_mode || 'precision';
   document.getElementById('setting-confidence').value = settings.llm_min_confidence || 0.60;
   document.getElementById('setting-max-llm-calls').value = coalesce(settings.max_llm_calls_per_day, 0);
@@ -1379,12 +1379,12 @@ function populateSettings(data) {
   document.getElementById('scalp-ema-slow').value = coalesce(settings.scalp_ema_slow, 21);
   document.getElementById('scalp-stoch-k').value = coalesce(settings.scalp_stoch_k, 5);
   document.getElementById('scalp-stoch-d').value = coalesce(settings.scalp_stoch_d, 3);
-  document.getElementById('scalp-sl-atr').value = coalesce(settings.scalp_sl_atr_mult, 1.0);
-  document.getElementById('scalp-tp-atr').value = coalesce(settings.scalp_tp_atr_mult, 1.8);
-  document.getElementById('scalp-spread-gold').value = coalesce(settings.scalp_max_spread_gold, 25.0);
+  document.getElementById('scalp-sl-atr').value = coalesce(settings.scalp_sl_atr_mult, 1.5);
+  document.getElementById('scalp-tp-atr').value = coalesce(settings.scalp_tp_atr_mult, 3.0);
+  document.getElementById('scalp-spread-gold').value = coalesce(settings.scalp_max_spread_gold, 6.0);
   document.getElementById('scalp-min-score').value = coalesce(settings.scalp_min_score, 5);
   document.getElementById('scalp-kill-zones').value = String(coalesce(settings.scalp_only_kill_zones, true));
-  document.getElementById('scalp-max-per-hour').value = coalesce(settings.scalp_max_trades_per_hour, 4);
+  document.getElementById('scalp-max-per-hour').value = coalesce(settings.scalp_max_trades_per_hour, 2);
   document.getElementById('scalp-adx-min').value = coalesce(settings.scalp_adx_min_trend, 30);
   document.getElementById('require-human-confirmation').value = String(coalesce(settings.require_human_confirmation, false));
   updateStrategyModeUI();
@@ -1429,14 +1429,14 @@ async function saveSettings(silent = false) {
     preferred_symbols: 'XAUUSDm',
     max_symbols_per_cycle: 1,
     ai_provider_requested: 'ollama',
-    check_interval_minutes: parseInt(document.getElementById('setting-check-interval').value || '15', 10),
-    max_risk_per_trade: parseFloat(document.getElementById('setting-risk').value || '0.02'),
-    daily_target: parseFloat(document.getElementById('setting-daily-target').value || '0'),
-    daily_loss_limit: parseFloat(document.getElementById('setting-daily-loss').value || '-5'),
-    max_open_positions: parseInt(document.getElementById('setting-max-positions').value || '2', 10),
+    check_interval_minutes: parseInt(document.getElementById('setting-check-interval').value || '5', 10),
+    max_risk_per_trade: parseFloat(document.getElementById('setting-risk').value || '0.015'),
+    daily_target: parseFloat(document.getElementById('setting-daily-target').value || '5'),
+    daily_loss_limit: parseFloat(document.getElementById('setting-daily-loss').value || '-10'),
+    max_open_positions: parseInt(document.getElementById('setting-max-positions').value || '1', 10),
     local_llm_model: document.getElementById('setting-local-model').value,
     local_llm_endpoint: document.getElementById('setting-local-endpoint').value,
-    local_llm_timeout: parseInt(document.getElementById('setting-local-timeout').value || '120', 10),
+    local_llm_timeout: parseInt(document.getElementById('setting-local-timeout').value || '300', 10),
     llm_analysis_mode: document.getElementById('setting-analysis-mode').value,
     llm_min_confidence: parseFloat(document.getElementById('setting-confidence').value || '0.60'),
     max_llm_calls_per_day: parseInt(document.getElementById('setting-max-llm-calls').value || '0', 10),
@@ -1452,12 +1452,12 @@ async function saveSettings(silent = false) {
     scalp_ema_slow: parseInt(document.getElementById('scalp-ema-slow').value || '21', 10),
     scalp_stoch_k: parseInt(document.getElementById('scalp-stoch-k').value || '5', 10),
     scalp_stoch_d: parseInt(document.getElementById('scalp-stoch-d').value || '3', 10),
-    scalp_sl_atr_mult: parseFloat(document.getElementById('scalp-sl-atr').value || '1.0'),
-    scalp_tp_atr_mult: parseFloat(document.getElementById('scalp-tp-atr').value || '1.8'),
-    scalp_max_spread_gold: parseFloat(document.getElementById('scalp-spread-gold').value || '25.0'),
+    scalp_sl_atr_mult: parseFloat(document.getElementById('scalp-sl-atr').value || '1.5'),
+    scalp_tp_atr_mult: parseFloat(document.getElementById('scalp-tp-atr').value || '3.0'),
+    scalp_max_spread_gold: parseFloat(document.getElementById('scalp-spread-gold').value || '6.0'),
     scalp_min_score: parseInt(document.getElementById('scalp-min-score').value || '5', 10),
     scalp_only_kill_zones: document.getElementById('scalp-kill-zones').value === 'true',
-    scalp_max_trades_per_hour: parseInt(document.getElementById('scalp-max-per-hour').value || '4', 10),
+    scalp_max_trades_per_hour: parseInt(document.getElementById('scalp-max-per-hour').value || '2', 10),
     scalp_adx_min_trend: parseFloat(document.getElementById('scalp-adx-min').value || '30'),
     require_human_confirmation: document.getElementById('require-human-confirmation').value === 'true',
   };
