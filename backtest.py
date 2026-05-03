@@ -1,9 +1,9 @@
 """
-Backtest walk-forward : teste la stratégie sur données historiques.
-Reproduit fidèlement le comportement du bot live (M15, filtres identiques).
+Backtest walk-forward : teste la stratégie XAUUSDm sur données historiques.
+Reproduit fidèlement le comportement du bot live spécialisé Gold.
 
 Usage:
-    python backtest.py EURUSDm 10
+    python backtest.py XAUUSDm 10
     python backtest.py XAUUSDm 20
     (teste sur N derniers jours)
 """
@@ -42,11 +42,11 @@ def _parse_candle_time(candle: Dict) -> Optional[datetime]:
 class SimpleBacktester:
     """Backtest léger reproduisant le comportement live du bot Exeness."""
 
-    def __init__(self, broker, instrument: str = "EURUSDm"):
+    def __init__(self, broker, instrument: str = "XAUUSDm"):
         self.broker = broker
         self.instrument = instrument
         self.trades: List[Dict] = []
-        self.balances: List[float] = [1000.0]
+        self.balances: List[float] = [100.0]
         self.spread_pips: float = 1.5
         self.memory = AgentMemory()
         self.store = RuntimeStore()
@@ -369,7 +369,7 @@ class SimpleBacktester:
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def run_backtest_cli():
-    instrument = sys.argv[1] if len(sys.argv) > 1 else "EURUSDm"
+    instrument = sys.argv[1] if len(sys.argv) > 1 else "XAUUSDm"
     days = int(sys.argv[2]) if len(sys.argv) > 2 else 10
 
     try:

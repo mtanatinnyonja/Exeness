@@ -617,14 +617,14 @@ HTML_PAGE = r"""<!DOCTYPE html>
         <button class="btn" onclick="saveSettings()">Sauvegarder</button>
         <button class="btn" onclick="testAI()">Tester IA</button>
         <button class="btn secondary" id="auto-ai-btn" onclick="toggleAutoAI()">Auto IA: ON</button>
-        <span class="refresh-info" id="ai-mode-note">Le cockpit affiche un signal IA en aperçu sur la paire active. Un ordre réel MT5 n'est envoyé que par le cycle automatique quand toutes les validations sont encore confirmées.</span>
+        <span class="refresh-info" id="ai-mode-note">Le cockpit affiche un signal IA en aperçu sur XAUUSDm. Un ordre réel MT5 n'est envoyé que par le cycle automatique quand toutes les validations sont encore confirmées.</span>
       </div>
-      <div id="ai-test-result" class="refresh-info" style="margin-top:10px;white-space:normal;line-height:1.6;">Chargement de l'analyse automatique sur la paire active...</div>
+      <div id="ai-test-result" class="refresh-info" style="margin-top:10px;white-space:normal;line-height:1.6;">Chargement de l'analyse automatique sur XAUUSDm...</div>
 
       <div class="live-ai-box">
         <div class="panel-title" style="margin-bottom:8px;">Cockpit IA en direct</div>
         <div class="focus-toolbar">
-          <span class="refresh-info" id="rotation-label">Rotation auto sur toutes les paires</span>
+          <span class="refresh-info" id="rotation-label">Focus fixe : XAUUSDm</span>
         </div>
         <div id="ai-live-decision" class="refresh-info" style="white-space:normal;line-height:1.6;">En attente d'une analyse IA...</div>
         <div class="mini-grid">
@@ -637,8 +637,8 @@ HTML_PAGE = r"""<!DOCTYPE html>
         <div class="market-deck">
           <div class="market-box">
             <div class="panel-title" style="margin-bottom:8px;">Marché live</div>
-            <div id="pair-sparkline" class="sparkline-box"><span class="refresh-info">Aucune paire analysée</span></div>
-            <div id="pair-market-note" class="market-note">Le graphique montrera uniquement la paire sélectionnée.</div>
+            <div id="pair-sparkline" class="sparkline-box"><span class="refresh-info">Aucune donnée XAUUSDm</span></div>
+            <div id="pair-market-note" class="market-note">Le graphique montre uniquement XAUUSDm.</div>
           </div>
           <div class="market-box">
             <div class="panel-title" style="margin-bottom:8px;">Forces de l'analyse</div>
@@ -808,18 +808,18 @@ HTML_PAGE = r"""<!DOCTYPE html>
   </div>
   <div class="ai-exchange" style="margin-bottom:16px;" id="scanner-panel">
     <div class="ai-exchange-header" onclick="toggleScanner()">
-      <span class="panel-title">🔍 Scanner de Paires Dynamique</span>
+      <span class="panel-title">🔍 Scanner XAUUSDm</span>
       <span id="scanner-badge" style="padding:2px 8px;border-radius:4px;font-size:0.75em;margin-left:8px;background:var(--accent);color:#fff;">—</span>
       <span class="toggle-arrow" id="scanner-arrow">▼</span>
     </div>
     <div class="ai-exchange-body" id="scanner-body">
       <div style="display:flex;gap:16px;margin-bottom:10px;">
         <div style="flex:1;">
-          <div style="color:var(--green);font-weight:600;margin-bottom:8px;">✅ Paires Sélectionnées</div>
+          <div style="color:var(--green);font-weight:600;margin-bottom:8px;">✅ XAU retenu</div>
           <div id="scan-selected" style="font-size:0.85em;">—</div>
         </div>
         <div style="flex:1;">
-          <div style="color:var(--red);font-weight:600;margin-bottom:8px;">❌ Paires Rejetées (spread)</div>
+          <div style="color:var(--red);font-weight:600;margin-bottom:8px;">❌ XAU rejeté (spread)</div>
           <div id="scan-rejected" style="font-size:0.85em;color:var(--muted);">—</div>
         </div>
       </div>
@@ -830,7 +830,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
   <!-- TRENDING PAIRS PANEL -->
   <div class="ai-exchange" style="margin-bottom:16px;" id="trending-panel">
     <div class="ai-exchange-header" onclick="toggleTrending()">
-      <span class="panel-title">📈 Paires en Tendance (Analyse Silencieuse)</span>
+      <span class="panel-title">📈 Tendance XAUUSDm</span>
       <span id="trending-badge" style="padding:2px 8px;border-radius:4px;font-size:0.75em;margin-left:8px;background:var(--green);color:#000;">—</span>
       <span class="toggle-arrow" id="trending-arrow">▼</span>
     </div>
@@ -1498,7 +1498,7 @@ function syncFocusPairs(symbols, trending) {
     if (trendingSyms.length) {
       label.textContent = '📈 Tendance : ' + trendingSyms.map(p => p.symbol + ' (' + (p.direction || '—') + ')').join(', ');
     } else {
-      label.textContent = 'Rotation auto : ' + visible.join(', ');
+      label.textContent = 'Focus XAU : ' + visible.join(', ');
     }
   }
 }
@@ -1689,10 +1689,10 @@ function renderScanner(scan) {
   // Badge
   if (mode === 'smart') {
     badge.style.background = 'var(--accent)';
-    badge.textContent = 'SMART · ' + selected.length + ' paires';
+    badge.textContent = 'XAU · ' + selected.length + ' actif';
   } else if (mode === 'preferred') {
     badge.style.background = '#f39c12'; badge.style.color = '#000';
-    badge.textContent = 'STATIQUE · ' + selected.length + ' paires';
+    badge.textContent = 'FIXE · ' + selected.length + ' actif';
   } else {
     badge.textContent = mode;
   }
@@ -1721,7 +1721,7 @@ function renderScanner(scan) {
   } else {
     selDiv.innerHTML = selected.length > 0
       ? selected.map(s => '<span style="margin-right:6px;">' + s + '</span>').join('')
-      : '<span style="color:var(--muted);">Aucune paire sélectionnée</span>';
+      : '<span style="color:var(--muted);">Aucun XAU retenu</span>';
   }
 
   // Rejected pairs
@@ -1733,7 +1733,7 @@ function renderScanner(scan) {
       '<span style="color:var(--red);">' + coalesce(r.spread, '—') + 'p > ' + coalesce(r.max_spread, '—') + 'p</span></div>'
     ).join('');
   } else {
-    rejDiv.innerHTML = '<span style="color:var(--green);">Aucune paire rejetée</span>';
+    rejDiv.innerHTML = '<span style="color:var(--green);">Aucun rejet XAU</span>';
   }
 
   // Full table
@@ -2067,8 +2067,8 @@ async function fetchStatus() {
     const modeNote = document.getElementById('ai-mode-note');
     if (modeNote) {
       modeNote.textContent = allowTrade
-        ? 'Le cockpit affiche un signal IA en aperçu sur la paire active. Un ordre réel MT5 n\'est envoyé que par le cycle automatique quand toutes les validations sont encore confirmées.'
-        : 'L\'agent autonome analyse la paire active en continu. Active le trading réel démo pour autoriser les ouvertures et fermetures automatiques.';
+        ? 'Le cockpit affiche un signal IA en aperçu sur XAUUSDm. Un ordre réel MT5 n\'est envoyé que par le cycle automatique quand toutes les validations sont encore confirmées.'
+        : 'L\'agent autonome analyse XAUUSDm en continu. Active le trading réel démo pour autoriser les ouvertures et fermetures automatiques.';
     }
     syncFocusPairs(data.active_symbols || [], data.trending_pairs || []);
 
