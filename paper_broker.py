@@ -452,6 +452,9 @@ class PaperBroker:
                 "nav": round(equity, 2),
                 "open_trades": len(self._positions),
                 "currency": str(self._account.get("currency", "USD") or "USD"),
+                "is_cents": False,
+                "display_currency": "$",
+                "cents_ratio": 1,
                 "connected": self.mt5 is not None,
                 "provider": "paper",
             }

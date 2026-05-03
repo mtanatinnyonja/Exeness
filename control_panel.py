@@ -495,10 +495,11 @@ HTML_PAGE = r"""<!DOCTYPE html>
       <div class="logo-icon">⚡</div>
       <div>
         <div class="logo-text">Agent IA MT5</div>
-        <div class="logo-sub">AUTONOME · OLLAMA · MT5</div>
+        <div class="logo-sub" id="header-subtitle">AUTONOME · OLLAMA · MT5</div>
       </div>
     </div>
     <div style="display:flex;align-items:center;gap:12px">
+      <span id="account-type-badge" style="display:none;padding:3px 10px;border-radius:12px;font-size:0.75em;font-weight:600;letter-spacing:0.05em;color:#fff;"></span>
       <span class="refresh-info">Refresh: <span id="countdown">5</span>s</span>
       <div id="status-badge" class="closed">
         <div class="dot"></div>
@@ -608,6 +609,13 @@ HTML_PAGE = r"""<!DOCTYPE html>
             <option value="true">true</option>
           </select>
         </div>
+        <div class="field" style="grid-column:1/-1">
+          <label>Type de compte détecté</label>
+          <div id="account-type-info" style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:6px;background:rgba(255,255,255,0.04);border:1px solid var(--border);">
+            <span id="account-type-info-badge" style="padding:2px 10px;border-radius:10px;font-size:0.78em;font-weight:600;color:#fff;background:#3b82f6;">COMPTE STANDARD</span>
+            <span id="account-type-info-detail" style="color:var(--muted);font-size:0.85em;">Valeurs monétaires affichées en USD ($)</span>
+          </div>
+        </div>
       </div>
       <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
         <button class="btn" onclick="saveSettings()">Sauvegarder</button>
@@ -677,6 +685,94 @@ HTML_PAGE = r"""<!DOCTYPE html>
       <div style="margin-top:10px;display:flex;gap:10px;align-items:center;">
         <button class="btn" onclick="testTelegram()">Tester Telegram</button>
         <span class="refresh-info" id="tg-test-result"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- SCALPING SETTINGS -->
+  <div class="panel" style="margin-bottom:16px;">
+    <div class="panel-header">
+      <span class="panel-title">⚡ Scalping — Paramètres</span>
+      <span class="refresh-info">EMA 9/21 · Stoch(5,3,3) · ATR SL/TP · Kill Zones London/NY</span>
+    </div>
+    <div class="panel-body">
+      <div class="form-grid">
+        <div class="field">
+          <label>Moteur de signaux</label>
+          <select id="strategy-mode" onchange="scheduleAutoSave()">
+            <option value="classic">classic (ancien système)</option>
+            <option value="scalping">scalping uniquement</option>
+            <option value="hybrid">hybrid (classique + scalping)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Mode scalping</label>
+          <select id="scalp-mode" onchange="scheduleAutoSave()">
+            <option value="momentum">momentum (breakout)</option>
+            <option value="mean_reversion">mean_reversion (rebond)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Timeframe</label>
+          <select id="scalp-timeframe" onchange="scheduleAutoSave()">
+            <option value="M5">M5</option>
+            <option value="M1">M1</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>EMA rapide</label>
+          <input id="scalp-ema-fast" type="number" min="3" max="20" oninput="scheduleAutoSave()" />
+        </div>
+        <div class="field">
+          <label>EMA lente</label>
+          <input id="scalp-ema-slow" type="number" min="10" max="50" oninput="scheduleAutoSave()" />
+        </div>
+        <div class="field">
+          <label>Stoch K</label>
+          <input id="scalp-stoch-k" type="number" min="3" max="14" oninput="scheduleAutoSave()" />
+        </div>
+        <div class="field">
+          <label>Stoch D</label>
+          <input id="scalp-stoch-d" type="number" min="2" max="9" oninput="scheduleAutoSave()" />
+        </div>
+        <div class="field">
+          <label>SL × ATR</label>
+          <input id="scalp-sl-atr" type="number" min="0.5" max="3.0" step="0.1" oninput="scheduleAutoSave()" />
+        </div>
+        <div class="field">
+          <label>TP × ATR</label>
+          <input id="scalp-tp-atr" type="number" min="0.5" max="5.0" step="0.1" oninput="scheduleAutoSave()" />
+        </div>
+        <div class="field">
+          <label>Spread max Forex (p)</label>
+          <input id="scalp-spread-forex" type="number" min="0.5" max="5.0" step="0.1" oninput="scheduleAutoSave()" />
+        </div>
+        <div class="field">
+          <label>Spread max Gold (p)</label>
+          <input id="scalp-spread-gold" type="number" min="5" max="80" step="1" oninput="scheduleAutoSave()" />
+        </div>
+        <div class="field">
+          <label>Score min (0–6)</label>
+          <input id="scalp-min-score" type="number" min="1" max="6" oninput="scheduleAutoSave()" />
+        </div>
+        <div class="field">
+          <label>Kill Zones uniquement</label>
+          <select id="scalp-kill-zones" onchange="scheduleAutoSave()">
+            <option value="true">oui (recommandé)</option>
+            <option value="false">non (toujours)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Max trades / heure</label>
+          <input id="scalp-max-per-hour" type="number" min="1" max="20" oninput="scheduleAutoSave()" />
+        </div>
+        <div class="field">
+          <label>ADX min tendance</label>
+          <input id="scalp-adx-min" type="number" min="10" max="40" step="1" oninput="scheduleAutoSave()" />
+        </div>
+      </div>
+      <div style="margin-top:10px;color:var(--muted);font-family:var(--mono);font-size:11px;">
+        Kill Zones actives : London Open 07h–10h UTC · NY Open 12h–15h UTC. Spread filtré avant chaque signal.
       </div>
     </div>
   </div>
@@ -791,7 +887,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
     <div class="kpi">
       <div class="kpi-label">Balance</div>
       <div class="kpi-value neutral" id="balance">—</div>
-      <div class="kpi-sub">USD</div>
+      <div class="kpi-sub" id="balance-sub">USD</div>
     </div>
     <div class="kpi">
       <div class="kpi-label">P&L Aujourd'hui</div>
@@ -959,11 +1055,12 @@ function coalesce() {
   return null;
 }
 
-function fmtPnl(val) {
+function fmtPnl(val, currSym) {
+  const sym = currSym || window._displayCurrency || '$';
   const v = parseFloat(val) || 0;
   const cls = v > 0 ? 'positive' : v < 0 ? 'negative' : 'neutral';
   const sign = v > 0 ? '+' : '';
-  return `<span class="${cls}">${sign}$${v.toFixed(2)}</span>`;
+  return `<span class="${cls}">${sign}${sym}${v.toFixed(2)}</span>`;
 }
 
 function perfDurationLabel(seconds) {
@@ -1051,7 +1148,14 @@ function renderPerformance(data) {
       tbody.innerHTML = trades.map((t) => {
         const pnl = parseFloat(t.pnl || 0) || 0;
         const pnlCls = pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : 'neutral';
-        const pnlTxt = (pnl > 0 ? '+' : '') + '$' + pnl.toFixed(2);
+        const currSym = window._displayCurrency || '$';
+        let pnlTxt;
+        if (window._isCents) {
+          const pnlUsd = pnl / 100;
+          pnlTxt = (pnl > 0 ? '+' : '') + '\u00a2' + pnl.toFixed(2) + ' <span style="color:var(--muted);font-size:0.85em;">($' + (pnl > 0 ? '+' : '') + pnlUsd.toFixed(2) + ')</span>';
+        } else {
+          pnlTxt = (pnl > 0 ? '+' : '') + '$' + pnl.toFixed(2);
+        }
         const dir = String(t.direction || '?').toUpperCase();
         const dirClass = dir === 'BUY' ? 'buy' : dir === 'SELL' ? 'sell' : 'wait';
         return '<tr>' +
@@ -1128,6 +1232,23 @@ function populateSettings(data) {
   if (settings.telegram_bot_token) document.getElementById('setting-telegram-token').value = settings.telegram_bot_token;
   if (settings.telegram_chat_id) document.getElementById('setting-telegram-chatid').value = settings.telegram_chat_id;
 
+  // Scalping settings
+  document.getElementById('strategy-mode').value = settings.strategy_mode || 'hybrid';
+  document.getElementById('scalp-mode').value = settings.scalp_mode || 'momentum';
+  document.getElementById('scalp-timeframe').value = settings.scalp_timeframe || 'M5';
+  document.getElementById('scalp-ema-fast').value = coalesce(settings.scalp_ema_fast, 9);
+  document.getElementById('scalp-ema-slow').value = coalesce(settings.scalp_ema_slow, 21);
+  document.getElementById('scalp-stoch-k').value = coalesce(settings.scalp_stoch_k, 5);
+  document.getElementById('scalp-stoch-d').value = coalesce(settings.scalp_stoch_d, 3);
+  document.getElementById('scalp-sl-atr').value = coalesce(settings.scalp_sl_atr_mult, 1.0);
+  document.getElementById('scalp-tp-atr').value = coalesce(settings.scalp_tp_atr_mult, 1.8);
+  document.getElementById('scalp-spread-forex').value = coalesce(settings.scalp_max_spread_forex, 1.5);
+  document.getElementById('scalp-spread-gold').value = coalesce(settings.scalp_max_spread_gold, 25.0);
+  document.getElementById('scalp-min-score').value = coalesce(settings.scalp_min_score, 3);
+  document.getElementById('scalp-kill-zones').value = String(coalesce(settings.scalp_only_kill_zones, true));
+  document.getElementById('scalp-max-per-hour').value = coalesce(settings.scalp_max_trades_per_hour, 4);
+  document.getElementById('scalp-adx-min').value = coalesce(settings.scalp_adx_min_trend, 20);
+
   // Agent pipeline status: show from heartbeat data
   const agentData = data.agents || [];
   if (agentData.length > 0) {
@@ -1135,6 +1256,22 @@ function populateSettings(data) {
     const stopped = agentData.filter(a => a.status !== 'running').map(a => a.name.replace('Agent', '') + ' 🔴');
     const all = [...running, ...stopped];
     document.getElementById('agent-pipeline-status').textContent = all.join(' → ') || '—';
+  }
+
+  // Account type info in settings panel
+  const adSettings = data.account_display || {};
+  const infoBadge = document.getElementById('account-type-info-badge');
+  const infoDetail = document.getElementById('account-type-info-detail');
+  if (infoBadge && adSettings.account_type_label) {
+    infoBadge.textContent = adSettings.account_type_label;
+    infoBadge.style.background = adSettings.account_type_color || '#3b82f6';
+  }
+  if (infoDetail) {
+    if (adSettings.is_cents) {
+      infoDetail.textContent = 'Valeurs en centimes (\u00a2). 100\u00a2 = 1$ USD réel.';
+    } else {
+      infoDetail.textContent = 'Valeurs monétaires affichées en USD ($)';
+    }
   }
 }
 
@@ -1167,6 +1304,21 @@ async function saveSettings(silent = false) {
     telegram_enabled: document.getElementById('setting-telegram-enabled').value === 'true',
     telegram_bot_token: document.getElementById('setting-telegram-token').value.trim(),
     telegram_chat_id: document.getElementById('setting-telegram-chatid').value.trim(),
+    strategy_mode: document.getElementById('strategy-mode').value,
+    scalp_mode: document.getElementById('scalp-mode').value,
+    scalp_timeframe: document.getElementById('scalp-timeframe').value,
+    scalp_ema_fast: parseInt(document.getElementById('scalp-ema-fast').value || '9', 10),
+    scalp_ema_slow: parseInt(document.getElementById('scalp-ema-slow').value || '21', 10),
+    scalp_stoch_k: parseInt(document.getElementById('scalp-stoch-k').value || '5', 10),
+    scalp_stoch_d: parseInt(document.getElementById('scalp-stoch-d').value || '3', 10),
+    scalp_sl_atr_mult: parseFloat(document.getElementById('scalp-sl-atr').value || '1.0'),
+    scalp_tp_atr_mult: parseFloat(document.getElementById('scalp-tp-atr').value || '1.8'),
+    scalp_max_spread_forex: parseFloat(document.getElementById('scalp-spread-forex').value || '1.5'),
+    scalp_max_spread_gold: parseFloat(document.getElementById('scalp-spread-gold').value || '25.0'),
+    scalp_min_score: parseInt(document.getElementById('scalp-min-score').value || '3', 10),
+    scalp_only_kill_zones: document.getElementById('scalp-kill-zones').value === 'true',
+    scalp_max_trades_per_hour: parseInt(document.getElementById('scalp-max-per-hour').value || '4', 10),
+    scalp_adx_min_trend: parseFloat(document.getElementById('scalp-adx-min').value || '20'),
   };
 
   const res = await fetch('/api/settings', {
@@ -1838,15 +1990,42 @@ async function fetchStatus() {
       setTimeout(() => testAI(), 300);
     }
 
+    // Account type detection + adaptive display
+    const ad = data.account_display || {};
+    const isCents = !!ad.is_cents;
+    const displayCurrency = ad.display_currency || '$';
+    window._displayCurrency = displayCurrency;
+    window._isCents = isCents;
+    const accentColor = ad.accent_color || '#3b82f6';
+    document.documentElement.style.setProperty('--accent', accentColor);
+
+    // Header subtitle
+    const subtitleEl = document.getElementById('header-subtitle');
+    if (subtitleEl && ad.header_subtitle) subtitleEl.textContent = ad.header_subtitle;
+
+    // Account type badge
+    const badgeEl = document.getElementById('account-type-badge');
+    if (badgeEl && ad.account_type_label) {
+      badgeEl.style.display = 'inline';
+      badgeEl.textContent = ad.account_type_label;
+      badgeEl.style.background = ad.account_type_color || '#3b82f6';
+    }
+
     // KPIs
     const balance = (data.account && data.account.balance) || 0;
-    document.getElementById('balance').textContent = '$' + balance.toFixed(2);
+    if (isCents && ad.balance_real_usd != null) {
+      document.getElementById('balance').textContent = '\u00a2' + balance.toFixed(2);
+      document.getElementById('balance-sub').textContent = '= $' + ad.balance_real_usd.toFixed(2) + ' USD réel';
+    } else {
+      document.getElementById('balance').textContent = '$' + balance.toFixed(2);
+      document.getElementById('balance-sub').textContent = 'USD';
+    }
 
     const dpnl = data.daily_pnl || 0;
     const dpnlEl = document.getElementById('daily-pnl');
     dpnlEl.innerHTML = fmtPnl(dpnl);
     const target = parseFloat(coalesce(data.settings && data.settings.daily_target, 0));
-    document.getElementById('daily-pnl-sub').textContent = target > 0 ? ('vs objectif $' + target.toFixed(2)) : 'objectif désactivé';
+    document.getElementById('daily-pnl-sub').textContent = target > 0 ? ('vs objectif ' + displayCurrency + target.toFixed(2)) : 'objectif désactivé';
 
     const tpnl = data.total_pnl || 0;
     document.getElementById('total-pnl').innerHTML = fmtPnl(tpnl);
@@ -2004,7 +2183,11 @@ function initAutoSave() {
     'setting-confidence',
     'setting-max-llm-calls',
     'setting-analysis-notes',
-    'setting-allow-trade'
+    'setting-allow-trade', 'strategy-mode',
+    'scalp-mode', 'scalp-timeframe', 'scalp-ema-fast', 'scalp-ema-slow',
+    'scalp-stoch-k', 'scalp-stoch-d', 'scalp-sl-atr', 'scalp-tp-atr',
+    'scalp-spread-forex', 'scalp-spread-gold', 'scalp-min-score',
+    'scalp-kill-zones', 'scalp-max-per-hour', 'scalp-adx-min'
   ].forEach(id => {
     const el = document.getElementById(id);
     if (el) {
@@ -2254,12 +2437,27 @@ class Handler(BaseHTTPRequestHandler):
                     for name in ["AnalystAgent", "RiskAgent", "DecisionAgent", "ExecutionAgent", "GuardianAgent"]:
                         agents_status.append({"name": name, "status": "stopped"})
 
+                # Account type detection
+                _is_cents = bool(account.get("is_cents", False))
+                account_display = {
+                    "is_cents": _is_cents,
+                    "display_currency": account.get("display_currency", "$"),
+                    "cents_ratio": int(account.get("cents_ratio", 1)),
+                    "account_type_label": "COMPTE CENTS" if _is_cents else "COMPTE STANDARD",
+                    "account_type_color": "#f59e0b" if _is_cents else "#3b82f6",
+                    "accent_color": "#f59e0b" if _is_cents else "#3b82f6",
+                    "header_subtitle": "AUTONOME · OLLAMA · MT5 · CENTS" if _is_cents else "AUTONOME · OLLAMA · MT5",
+                    "balance_real_usd": round(account.get("balance", 0.0) / 100.0, 2) if _is_cents else None,
+                    "nav_real_usd": round(account.get("nav", 0.0) / 100.0, 2) if _is_cents else None,
+                }
+
                 status = {
                     # Market state
                     "market_open": market_open,
                     "market_status": market_status,
                     # Account
                     "account": account,
+                    "account_display": account_display,
                     "open_positions": positions,
                     "recent_trades": recent_trades,
                     # Stats

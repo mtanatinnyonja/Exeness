@@ -109,7 +109,7 @@ class DecisionAgent(Agent):
         
         # DECISION FINALE : Trade approuvé
         direction = signal_data.get("direction", "?")
-        confidence = float(signal_data.get("score", 0)) / 5.0
+        confidence = min(float(signal_data.get("score", 0) or 0.0), 5.0) / 5.0
         risk_score = int(risk_data.get("risk_score", 0) or 0)
 
         if confidence < self.min_confidence:
