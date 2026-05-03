@@ -544,11 +544,9 @@ HTML_PAGE = r"""<!DOCTYPE html>
 
         <div class="field">
           <label>Filtre symboles (vide = tous)</label>
-          <input id="setting-preferred-symbols" placeholder="vide = tous les symboles MT5 visibles" />
-        </div>
-        <div class="field">
-          <label>Max symboles</label>
-          <input id="setting-max-symbols" type="number" min="1" max="20" />
+        <div class="field" style="grid-column:1/-1">
+          <label>Instrument</label>
+          <div style="padding:8px 12px;border-radius:6px;background:rgba(255,215,0,0.08);border:1px solid #f59e0b;color:#f59e0b;font-weight:600;font-size:0.9em;">🪙 XAUUSDm &mdash; spécialisé (fixé)</div>
         </div>
         <div class="field">
           <label>Intervalle minutes</label>
@@ -752,9 +750,6 @@ HTML_PAGE = r"""<!DOCTYPE html>
         </div>
         <div class="field">
           <label>Spread max Forex (p)</label>
-          <input id="scalp-spread-forex" type="number" min="0.5" max="5.0" step="0.1" oninput="scheduleAutoSave()" />
-        </div>
-        <div class="field">
           <label>Spread max Gold (p)</label>
           <input id="scalp-spread-gold" type="number" min="5" max="80" step="1" oninput="scheduleAutoSave()" />
         </div>
@@ -1359,11 +1354,6 @@ function colorVal(el, val) {
 
 function populateSettings(data) {
   const settings = data.settings || {};
-  const preferredSymbols = Array.isArray(settings.preferred_symbols)
-    ? settings.preferred_symbols.join(',')
-    : String(settings.preferred_symbols || '');
-  document.getElementById('setting-preferred-symbols').value = preferredSymbols;
-  document.getElementById('setting-max-symbols').value = settings.max_symbols_per_cycle || 3;
   document.getElementById('setting-check-interval').value = settings.check_interval_minutes || 15;
   document.getElementById('setting-risk').value = settings.max_risk_per_trade || 0.02;
   document.getElementById('setting-daily-target').value = coalesce(settings.daily_target, 2.0);
@@ -1394,7 +1384,6 @@ function populateSettings(data) {
   document.getElementById('scalp-stoch-d').value = coalesce(settings.scalp_stoch_d, 3);
   document.getElementById('scalp-sl-atr').value = coalesce(settings.scalp_sl_atr_mult, 1.0);
   document.getElementById('scalp-tp-atr').value = coalesce(settings.scalp_tp_atr_mult, 1.8);
-  document.getElementById('scalp-spread-forex').value = coalesce(settings.scalp_max_spread_forex, 1.5);
   document.getElementById('scalp-spread-gold').value = coalesce(settings.scalp_max_spread_gold, 25.0);
   document.getElementById('scalp-min-score').value = coalesce(settings.scalp_min_score, 3);
   document.getElementById('scalp-kill-zones').value = String(coalesce(settings.scalp_only_kill_zones, true));
@@ -1438,10 +1427,11 @@ function scheduleAutoSave() {
 
 async function saveSettings(silent = false) {
   const payload = {
-    symbol_source_mode: 'visible',
+    symbol_source_mode: 'fixed',
+    symbol_selection_mode: 'fixed',
+    preferred_symbols: 'XAUUSDm',
+    max_symbols_per_cycle: 1,
     ai_provider_requested: 'ollama',
-    preferred_symbols: document.getElementById('setting-preferred-symbols').value,
-    max_symbols_per_cycle: parseInt(document.getElementById('setting-max-symbols').value || '3', 10),
     check_interval_minutes: parseInt(document.getElementById('setting-check-interval').value || '15', 10),
     max_risk_per_trade: parseFloat(document.getElementById('setting-risk').value || '0.02'),
     daily_target: parseFloat(document.getElementById('setting-daily-target').value || '0'),
@@ -1467,7 +1457,6 @@ async function saveSettings(silent = false) {
     scalp_stoch_d: parseInt(document.getElementById('scalp-stoch-d').value || '3', 10),
     scalp_sl_atr_mult: parseFloat(document.getElementById('scalp-sl-atr').value || '1.0'),
     scalp_tp_atr_mult: parseFloat(document.getElementById('scalp-tp-atr').value || '1.8'),
-    scalp_max_spread_forex: parseFloat(document.getElementById('scalp-spread-forex').value || '1.5'),
     scalp_max_spread_gold: parseFloat(document.getElementById('scalp-spread-gold').value || '25.0'),
     scalp_min_score: parseInt(document.getElementById('scalp-min-score').value || '3', 10),
     scalp_only_kill_zones: document.getElementById('scalp-kill-zones').value === 'true',
@@ -2013,8 +2002,8 @@ function renderAgentsStatus(agents) {
 async function testAI() {
   if (aiBusy) return;
   aiBusy = true;
-  const symbol = getNextRotationPair() || (((document.getElementById('setting-preferred-symbols').value || '').split(',')[0] || '').trim()) || '';
-  document.getElementById('ai-test-result').textContent = 'Analyse IA de ' + symbol + '...';
+  const symbol = 'XAUUSDm';
+  document.getElementById('ai-test-result').textContent = 'Analyse IA XAUUSDm...';
   try {
     const res = await fetch('/api/test-ai', {
       method: 'POST',
@@ -2072,20 +2061,9 @@ async function fetchStatus() {
     }
 
     // Config active
-    const rawPref = (data.settings && data.settings.preferred_symbols) || '';
-    const prefFilter = Array.isArray(rawPref) ? rawPref.join(', ') : String(rawPref).trim();
-    const filterLabel = prefFilter ? '🎯 ' + prefFilter : '🔍 toutes les paires';
-    document.getElementById('symbol-mode').textContent = filterLabel;
+    document.getElementById('symbol-mode').textContent = '🪙 XAUUSDm';
     document.getElementById('ai-provider').textContent = data.ai_provider || '—';
-    const symList = data.active_symbols || [];
-    const scanInfo = data.smart_scan || {};
-    const rejCount = (scanInfo.rejected || []).length;
-    const candCount = (scanInfo.candidates || []).length;
-    let symText = symList.join(', ') || '—';
-    if (candCount || rejCount) {
-      symText += ' (' + candCount + ' analysées, ' + rejCount + ' rejetées)';
-    }
-    document.getElementById('active-symbols').textContent = symText;
+    document.getElementById('active-symbols').textContent = 'XAUUSDm';
     populateSettings(data);
     renderPendingApprovals(data.pending_approvals || []);
     const allowTrade = String((data.settings && data.settings.allow_trade_execution) || false) === 'true';
@@ -2417,8 +2395,6 @@ function tick() {
 
 function initAutoSave() {
   [
-    'setting-preferred-symbols',
-    'setting-max-symbols',
     'setting-check-interval',
     'setting-risk',
     'setting-daily-target',
@@ -2434,7 +2410,7 @@ function initAutoSave() {
     'setting-allow-trade', 'strategy-mode',
     'scalp-mode', 'scalp-timeframe', 'scalp-ema-fast', 'scalp-ema-slow',
     'scalp-stoch-k', 'scalp-stoch-d', 'scalp-sl-atr', 'scalp-tp-atr',
-    'scalp-spread-forex', 'scalp-spread-gold', 'scalp-min-score',
+    'scalp-spread-gold', 'scalp-min-score',
     'scalp-kill-zones', 'scalp-max-per-hour', 'scalp-adx-min',
     'require-human-confirmation'
   ].forEach(id => {
@@ -2539,7 +2515,7 @@ class Handler(BaseHTTPRequestHandler):
 
                 # Calendar pause check
                 try:
-                    cal_pause = calendar.should_pause_trading("EURUSDm")
+                    cal_pause = calendar.should_pause_trading("XAUUSDm")
                     cal_status = {
                         "news_pause": cal_pause,
                         "upcoming": [],
@@ -2617,17 +2593,12 @@ class Handler(BaseHTTPRequestHandler):
                 market_status = {"reason": "MARCHÉ OUVERT" if market_open else "MARCHÉ FERMÉ (week-end)"}
 
                 account = broker.get_account_summary()
-                pref_raw = runtime_settings.get("preferred_symbols", "")
-                if pref_raw:
-                    raw_str = str(pref_raw).strip().strip("[]").replace("'", "").replace('"', "")
-                    active_symbols = [s.strip() for s in raw_str.split(",") if s.strip()]
-                else:
-                    active_symbols = list(getattr(cfg, "INSTRUMENTS", []))
+                active_symbols = ["XAUUSDm"]
 
-                # Live snapshot for first symbol
+                # Live snapshot XAU
                 live_snapshot = {}
                 try:
-                    sym = focus or (active_symbols[0] if active_symbols else "EURUSDm")
+                    sym = "XAUUSDm"
                     candles = broker.get_candles(sym, "H1", 60)
                     if len(candles) >= 2:
                         closes = [float(c["close"]) for c in candles[-30:]]
@@ -2782,7 +2753,7 @@ class Handler(BaseHTTPRequestHandler):
                 length = int(self.headers.get('Content-Length', '0'))
                 raw = self.rfile.read(length).decode('utf-8') if length else '{}'
                 payload = json.loads(raw)
-                instrument = payload.get('instrument', 'EURUSDm')
+                instrument = payload.get('instrument', 'XAUUSDm')
                 broker = build_broker()
                 candles = broker.get_candles(instrument, 'H1', 100)
                 if len(candles) < 20:
