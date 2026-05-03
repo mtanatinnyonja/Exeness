@@ -139,6 +139,9 @@ TRADE_DAYS = [0, 1, 2, 3, 4]
 # Mode de moteur de signaux : classic | scalping | hybrid
 STRATEGY_MODE = os.getenv("STRATEGY_MODE", "hybrid").strip().lower()
 
+# Confirmation humaine obligatoire avant tout ordre réel (sécurité)
+REQUIRE_HUMAN_CONFIRMATION = os.getenv("REQUIRE_HUMAN_CONFIRMATION", "false").strip().lower() in ("1", "true", "yes", "on")
+
 # ═══════════════════════════════════════════════════════════════════════════
 # SCALPING — paramètres du module scalping_strategy.py
 # Timeframe cible : M1 ou M5

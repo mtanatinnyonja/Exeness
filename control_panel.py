@@ -785,7 +785,35 @@ HTML_PAGE = r"""<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- SMART PAIR SCANNER -->
+  <!-- HUMAN CONFIRMATION GATE -->
+  <div class="panel" style="margin-bottom:16px;" id="panel-human-gate">
+    <div class="panel-header">
+      <span class="panel-title">🔒 Confirmation Humaine</span>
+      <span class="refresh-info">Point d'entrée manuel — approuve ou rejette chaque trade avant exécution</span>
+    </div>
+    <div class="panel-body">
+      <div class="form-grid" style="margin-bottom:14px;">
+        <div class="field">
+          <label>Confirmation humaine requise</label>
+          <select id="require-human-confirmation" onchange="scheduleAutoSave()">
+            <option value="false">non — exécution automatique</option>
+            <option value="true">oui — validation manuelle avant ordre</option>
+          </select>
+        </div>
+        <div class="field" style="grid-column:1/-1;">
+          <div id="human-gate-note" style="padding:10px 12px;border-radius:8px;background:rgba(255,200,50,0.07);border:1px solid rgba(255,200,50,0.3);color:#f59e0b;font-size:12px;line-height:1.5;">
+            Quand activé, chaque signal validé par les agents est mis <strong>en attente</strong> ici. Tu approuves ou rejettes avant tout envoi à MT5.
+          </div>
+        </div>
+      </div>
+
+      <!-- Pending trades -->
+      <div style="color:var(--text);font-weight:600;margin-bottom:8px;font-size:13px;">Trades en attente d'approbation</div>
+      <div id="pending-approvals-list">
+        <div style="color:var(--muted);font-size:12px;">Aucun trade en attente.</div>
+      </div>
+    </div>
+  </div>
   <div class="ai-exchange" style="margin-bottom:16px;" id="scanner-panel">
     <div class="ai-exchange-header" onclick="toggleScanner()">
       <span class="panel-title">🔍 Scanner de Paires Dynamique</span>
@@ -1086,6 +1114,47 @@ function updateStrategyModeUI() {
   scalpFieldsEl.style.display = 'contents';
 }
 
+async function approveOrRejectTrade(tradeId, action) {
+  try {
+    const res = await fetch('/api/' + action + '-trade', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: tradeId })
+    });
+    const data = await res.json();
+    if (data.ok) await fetchStatus();
+    else alert('Erreur: ' + (data.error || 'inconnu'));
+  } catch(e) { alert('Erreur réseau: ' + e); }
+}
+
+function renderPendingApprovals(list) {
+  const container = document.getElementById('pending-approvals-list');
+  if (!container) return;
+  if (!list || list.length === 0) {
+    container.innerHTML = '<div style="color:var(--muted);font-size:12px;">Aucun trade en attente.</div>';
+    return;
+  }
+  const rows = list.map(t => {
+    const expires = new Date(t.expires_at);
+    const minutesLeft = Math.max(0, Math.round((expires - Date.now()) / 60000));
+    const confPct = Math.round((t.confidence || 0) * 100);
+    const dirColor = t.direction === 'BUY' ? 'var(--green)' : '#ef4444';
+    return `
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:rgba(255,255,255,0.03);margin-bottom:6px;flex-wrap:wrap;">
+        <span style="font-family:var(--mono);font-weight:700;color:var(--text);">${t.instrument}</span>
+        <span style="font-weight:700;color:${dirColor};font-size:13px;">${t.direction}</span>
+        <span style="color:var(--muted);font-size:11px;">conf <strong style="color:var(--text);">${confPct}%</strong></span>
+        <span style="color:var(--muted);font-size:11px;">SL <strong>${t.sl_pips}p</strong> TP <strong>${t.tp_pips}p</strong></span>
+        <span style="color:var(--muted);font-size:11px;">source: ${t.source || '—'}</span>
+        <span style="margin-left:auto;color:var(--muted);font-size:11px;">⏱ ${minutesLeft}min</span>
+        <span style="font-family:var(--mono);font-size:10px;color:var(--muted);">#${t.id}</span>
+        <button onclick="approveOrRejectTrade('${t.id}','approve')" style="padding:4px 14px;border-radius:6px;border:none;background:var(--green);color:#fff;font-weight:600;cursor:pointer;font-size:12px;">✅ Approuver</button>
+        <button onclick="approveOrRejectTrade('${t.id}','reject')" style="padding:4px 14px;border-radius:6px;border:none;background:#ef4444;color:#fff;font-weight:600;cursor:pointer;font-size:12px;">❌ Rejeter</button>
+      </div>`;
+  });
+  container.innerHTML = rows.join('');
+}
+
 function fmtPnl(val, currSym) {
   const sym = currSym || window._displayCurrency || '$';
   const v = parseFloat(val) || 0;
@@ -1279,6 +1348,7 @@ function populateSettings(data) {
   document.getElementById('scalp-kill-zones').value = String(coalesce(settings.scalp_only_kill_zones, true));
   document.getElementById('scalp-max-per-hour').value = coalesce(settings.scalp_max_trades_per_hour, 4);
   document.getElementById('scalp-adx-min').value = coalesce(settings.scalp_adx_min_trend, 20);
+  document.getElementById('require-human-confirmation').value = String(coalesce(settings.require_human_confirmation, false));
   updateStrategyModeUI();
 
   // Agent pipeline status: show from heartbeat data
@@ -1351,6 +1421,7 @@ async function saveSettings(silent = false) {
     scalp_only_kill_zones: document.getElementById('scalp-kill-zones').value === 'true',
     scalp_max_trades_per_hour: parseInt(document.getElementById('scalp-max-per-hour').value || '4', 10),
     scalp_adx_min_trend: parseFloat(document.getElementById('scalp-adx-min').value || '20'),
+    require_human_confirmation: document.getElementById('require-human-confirmation').value === 'true',
   };
 
   const res = await fetch('/api/settings', {
@@ -1964,6 +2035,7 @@ async function fetchStatus() {
     }
     document.getElementById('active-symbols').textContent = symText;
     populateSettings(data);
+    renderPendingApprovals(data.pending_approvals || []);
     const allowTrade = String((data.settings && data.settings.allow_trade_execution) || false) === 'true';
     const modeNote = document.getElementById('ai-mode-note');
     if (modeNote) {
@@ -2219,7 +2291,8 @@ function initAutoSave() {
     'scalp-mode', 'scalp-timeframe', 'scalp-ema-fast', 'scalp-ema-slow',
     'scalp-stoch-k', 'scalp-stoch-d', 'scalp-sl-atr', 'scalp-tp-atr',
     'scalp-spread-forex', 'scalp-spread-gold', 'scalp-min-score',
-    'scalp-kill-zones', 'scalp-max-per-hour', 'scalp-adx-min'
+    'scalp-kill-zones', 'scalp-max-per-hour', 'scalp-adx-min',
+    'require-human-confirmation'
   ].forEach(id => {
     const el = document.getElementById(id);
     if (el) {
@@ -2525,6 +2598,14 @@ class Handler(BaseHTTPRequestHandler):
                     # Agents status
                     "agents": agents_status,
                 }
+                # Human pending approvals
+                try:
+                    from runtime_db import RuntimeStore as _RS
+                    _store = _RS()
+                    _store.expire_old_approvals()
+                    status["pending_approvals"] = _store.get_pending_approvals()
+                except Exception:
+                    status["pending_approvals"] = []
                 if focus:
                     status["focus"] = focus
                 self._send_json(status)
@@ -2585,6 +2666,21 @@ class Handler(BaseHTTPRequestHandler):
                 tg = TelegramNotifier()
                 result = tg.test_connection()
                 self._send_json(result)
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, status=500)
+        elif self.path in ('/api/approve-trade', '/api/reject-trade'):
+            try:
+                from runtime_db import RuntimeStore
+                length = int(self.headers.get('Content-Length', '0'))
+                raw = self.rfile.read(length).decode('utf-8') if length else '{}'
+                payload = json.loads(raw)
+                trade_id = str(payload.get('id', '')).strip()
+                if not trade_id:
+                    self._send_json({"ok": False, "error": "id manquant"}, status=400)
+                    return
+                new_status = 'approved' if self.path == '/api/approve-trade' else 'rejected'
+                updated = RuntimeStore().update_approval_status(trade_id, new_status)
+                self._send_json({"ok": updated, "id": trade_id, "status": new_status})
             except Exception as e:
                 self._send_json({"ok": False, "error": str(e)}, status=500)
         else:

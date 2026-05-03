@@ -18,7 +18,7 @@ from settings import (
     LLM_ANALYSIS_NOTES, LLM_MAX_CONTEXT_BARS,
     DAILY_TARGET, DAILY_LOSS_LIMIT, MAX_OPEN_POSITIONS,
     TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, SYMBOL_SELECTION_MODE,
-    STRATEGY_MODE,
+    STRATEGY_MODE, REQUIRE_HUMAN_CONFIRMATION,
     SCALP_MODE, SCALP_TIMEFRAME, SCALP_EMA_FAST, SCALP_EMA_SLOW,
     SCALP_STOCH_K, SCALP_STOCH_D, SCALP_STOCH_SMOOTH,
     SCALP_ATR_PERIOD, SCALP_SL_ATR_MULT, SCALP_TP_ATR_MULT,
@@ -64,6 +64,24 @@ class RuntimeStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS pending_approvals (
+                    id TEXT PRIMARY KEY,
+                    instrument TEXT NOT NULL,
+                    direction TEXT NOT NULL,
+                    confidence REAL,
+                    sl_pips REAL,
+                    tp_pips REAL,
+                    score REAL,
+                    source TEXT,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    payload TEXT
+                )
+                """
+            )
 
     def _defaults(self) -> Dict[str, Any]:
         return {
@@ -93,6 +111,7 @@ class RuntimeStore:
             "telegram_chat_id": TELEGRAM_CHAT_ID,
             "symbol_selection_mode": SYMBOL_SELECTION_MODE,
             "strategy_mode": str(STRATEGY_MODE),
+            "require_human_confirmation": bool(REQUIRE_HUMAN_CONFIRMATION),
             "scalp_mode": str(SCALP_MODE),
             "scalp_timeframe": str(SCALP_TIMEFRAME),
             "scalp_ema_fast": int(SCALP_EMA_FAST),
@@ -126,7 +145,7 @@ class RuntimeStore:
         return aliases.get(value, original)
 
     def _normalize(self, key: str, value: Any) -> Any:
-        if key in {"allow_trade_execution", "telegram_enabled", "scalp_only_kill_zones"}:
+        if key in {"allow_trade_execution", "telegram_enabled", "scalp_only_kill_zones", "require_human_confirmation"}:
             if isinstance(value, str):
                 return value.strip().lower() in {"1", "true", "yes", "on"}
             return bool(value)
@@ -282,3 +301,80 @@ class RuntimeStore:
                 (int(window), str(instrument).upper()),
             ).fetchone()
         return int(row[0] or 0) if row else 0
+
+    # ── Pending approvals ───────────────────────────────────────────────────
+
+    def add_pending_approval(self, trade_payload: Dict[str, Any], ttl_minutes: int = 15) -> str:
+        """Enregistre un trade en attente de confirmation humaine. Retourne l'id."""
+        import uuid
+        trade_id = str(uuid.uuid4())[:8]
+        now = datetime.now(timezone.utc)
+        expires = now + __import__("datetime").timedelta(minutes=ttl_minutes)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO pending_approvals
+                    (id, instrument, direction, confidence, sl_pips, tp_pips, score, source,
+                     created_at, expires_at, status, payload)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+                """,
+                (
+                    trade_id,
+                    str(trade_payload.get("instrument", "?")),
+                    str(trade_payload.get("direction", "?")),
+                    float(trade_payload.get("confidence", 0) or 0),
+                    float(trade_payload.get("sl_pips", 0) or 0),
+                    float(trade_payload.get("tp_pips", 0) or 0),
+                    float(trade_payload.get("score", 0) or 0),
+                    str(trade_payload.get("source", "auto")),
+                    now.isoformat(),
+                    expires.isoformat(),
+                    json.dumps(trade_payload, ensure_ascii=False),
+                ),
+            )
+        return trade_id
+
+    def get_pending_approvals(self, include_expired: bool = False) -> list:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            if include_expired:
+                rows = conn.execute(
+                    "SELECT id, instrument, direction, confidence, sl_pips, tp_pips, score, source, created_at, expires_at, status, payload FROM pending_approvals ORDER BY created_at DESC"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT id, instrument, direction, confidence, sl_pips, tp_pips, score, source, created_at, expires_at, status, payload FROM pending_approvals WHERE status = 'pending' AND expires_at > ? ORDER BY created_at DESC",
+                    (now,),
+                ).fetchall()
+        result = []
+        for r in rows:
+            try:
+                payload = json.loads(r[11]) if r[11] else {}
+            except Exception:
+                payload = {}
+            result.append({
+                "id": r[0], "instrument": r[1], "direction": r[2],
+                "confidence": float(r[3] or 0), "sl_pips": float(r[4] or 0),
+                "tp_pips": float(r[5] or 0), "score": float(r[6] or 0),
+                "source": r[7], "created_at": r[8], "expires_at": r[9],
+                "status": r[10], "payload": payload,
+            })
+        return result
+
+    def update_approval_status(self, trade_id: str, status: str) -> bool:
+        """Met à jour le statut : 'approved' | 'rejected' | 'executed' | 'expired'."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "UPDATE pending_approvals SET status = ? WHERE id = ? AND status = 'pending'",
+                (status, trade_id),
+            ).rowcount
+        return rows > 0
+
+    def expire_old_approvals(self):
+        """Marque les approbations expirées."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE pending_approvals SET status = 'expired' WHERE status = 'pending' AND expires_at <= ?",
+                (now,),
+            )
