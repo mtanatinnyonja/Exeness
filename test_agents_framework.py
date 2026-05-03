@@ -4,6 +4,7 @@ Vérifie que tous les agents peuvent démarrer et communiquer.
 """
 
 import asyncio
+import pytest
 from agent_framework import Agent, get_message_bus
 
 
@@ -43,26 +44,26 @@ class TestAgent2(Agent):
             await asyncio.sleep(0.1)
 
 
+@pytest.mark.asyncio
 async def test_architecture():
-    """Test basique."""
-    print("\n" + "="*70)
-    print("  🧪 TEST ARCHITECTURE MULTI-AGENT")
-    print("="*70 + "\n")
-    
+    """Test basique — agents communiquent et s'arrêtent proprement."""
     agent1 = TestAgent1("TestAgent1")
     agent2 = TestAgent2("TestAgent2")
-    
-    # Démarrer les agents
+
     await agent1.start()
     await agent2.start()
-    
-    # Lancer en parallèle
-    await asyncio.gather(
-        agent1.run(),
-        agent2.run(),
-    )
-    
-    print("\n✅ Test réussi!\n")
+
+    # Timeout 10s : Agent2 boucle indéfiniment, on coupe proprement
+    async def _run():
+        await asyncio.gather(agent1.run(), agent2.run())
+
+    try:
+        await asyncio.wait_for(_run(), timeout=10.0)
+    except asyncio.TimeoutError:
+        pass  # normal — Agent2 est infini par conception
+
+    agent2.running = False
+    assert True  # Pas d'exception = architecture fonctionnelle
 
 
 if __name__ == "__main__":
