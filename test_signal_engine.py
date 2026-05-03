@@ -142,14 +142,14 @@ def test_macd_returns_numeric_values_with_enough_data():
 
 def test_signal_score_insufficient_candles_returns_zero_and_none_direction():
     candles = make_candles(n=40)
-    result = calculate_signal_score(candles, "EURUSDm")
+    result = calculate_signal_score(candles, "XAUUSDm")
     assert result["score"] == 0
     assert result["direction"] is None
 
 
 def test_signal_score_range_and_direction_domain_and_required_details():
     candles = make_candles(n=220, trend=0.00005, volatility=0.0002)
-    result = calculate_signal_score(candles, "EURUSDm")
+    result = calculate_signal_score(candles, "XAUUSDm")
 
     assert 0 <= result["score"] <= 5
     assert result["direction"] in (None, "BUY", "SELL")
@@ -163,13 +163,13 @@ def test_signal_score_range_and_direction_domain_and_required_details():
 
 def test_signal_score_strong_bullish_trend_gives_buy():
     candles = make_candles(n=240, trend=0.0003, volatility=0.00005)
-    result = calculate_signal_score(candles, "EURUSDm")
+    result = calculate_signal_score(candles, "XAUUSDm")
     assert result["direction"] == "BUY"
 
 
 def test_signal_score_strong_bearish_trend_gives_sell():
     candles = make_candles(n=240, trend=-0.0003, volatility=0.00005)
-    result = calculate_signal_score(candles, "EURUSDm")
+    result = calculate_signal_score(candles, "XAUUSDm")
     assert result["direction"] == "SELL"
 
 
@@ -235,7 +235,7 @@ def test_human_summary_returns_string():
 
 def test_price_action_description_returns_text():
     candles = make_candles(n=90, trend=0.00005, volatility=0.0002)
-    text = build_price_action_description(candles, "EURUSDm")
+    text = build_price_action_description(candles, "XAUUSDm")
     assert isinstance(text, str)
     assert "Support:" in text or "Structure:" in text
 
@@ -245,11 +245,11 @@ def test_mtf_signal_branches_no_d1_aligned_and_counter():
     d1_up = make_candles(n=220, trend=0.0002, volatility=0.00005)
     d1_down = make_candles(n=220, trend=-0.0002, volatility=0.00005)
 
-    no_d1 = calculate_mtf_signal(h1_up, [], "EURUSDm")
+    no_d1 = calculate_mtf_signal(h1_up, [], "XAUUSDm")
     assert no_d1.get("confluence") == "no_d1_data"
 
-    aligned = calculate_mtf_signal(h1_up, d1_up, "EURUSDm")
+    aligned = calculate_mtf_signal(h1_up, d1_up, "XAUUSDm")
     assert aligned.get("confluence") in {"aligned", "neutral", "counter"}
 
-    counter = calculate_mtf_signal(h1_up, d1_down, "EURUSDm")
-    assert counter.get("confluence") in {"aligned", "neutral", "counter"}
+    counter = calculate_mtf_signal(h1_up, d1_down, "XAUUSDm")
+    assert counter.get("confluence") in {"aligned", "neutral", "counter", "counter_d1_blocked"}

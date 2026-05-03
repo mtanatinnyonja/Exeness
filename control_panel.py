@@ -542,13 +542,9 @@ HTML_PAGE = r"""<!DOCTYPE html>
     <div class="panel-body">
       <div class="form-grid">
 
-        <div class="field">
-          <label>Filtre symboles (vide = tous)</label>
-          <input id="setting-preferred-symbols" placeholder="vide = tous les symboles MT5 visibles" />
-        </div>
-        <div class="field">
-          <label>Max symboles</label>
-          <input id="setting-max-symbols" type="number" min="1" max="20" />
+        <div class="field" style="grid-column:1/-1">
+          <label>Instrument</label>
+          <div style="padding:8px 12px;border-radius:6px;background:rgba(255,215,0,0.08);border:1px solid #f59e0b;color:#f59e0b;font-weight:600;font-size:0.9em;">🪙 XAUUSDm &mdash; spécialisé (fixé)</div>
         </div>
         <div class="field">
           <label>Intervalle minutes</label>
@@ -621,14 +617,14 @@ HTML_PAGE = r"""<!DOCTYPE html>
         <button class="btn" onclick="saveSettings()">Sauvegarder</button>
         <button class="btn" onclick="testAI()">Tester IA</button>
         <button class="btn secondary" id="auto-ai-btn" onclick="toggleAutoAI()">Auto IA: ON</button>
-        <span class="refresh-info" id="ai-mode-note">Le cockpit affiche un signal IA en aperçu sur la paire active. Un ordre réel MT5 n'est envoyé que par le cycle automatique quand toutes les validations sont encore confirmées.</span>
+        <span class="refresh-info" id="ai-mode-note">Le cockpit affiche un signal IA en aperçu sur XAUUSDm. Un ordre réel MT5 n'est envoyé que par le cycle automatique quand toutes les validations sont encore confirmées.</span>
       </div>
-      <div id="ai-test-result" class="refresh-info" style="margin-top:10px;white-space:normal;line-height:1.6;">Chargement de l'analyse automatique sur la paire active...</div>
+      <div id="ai-test-result" class="refresh-info" style="margin-top:10px;white-space:normal;line-height:1.6;">Chargement de l'analyse automatique sur XAUUSDm...</div>
 
       <div class="live-ai-box">
         <div class="panel-title" style="margin-bottom:8px;">Cockpit IA en direct</div>
         <div class="focus-toolbar">
-          <span class="refresh-info" id="rotation-label">Rotation auto sur toutes les paires</span>
+          <span class="refresh-info" id="rotation-label">Focus fixe : XAUUSDm</span>
         </div>
         <div id="ai-live-decision" class="refresh-info" style="white-space:normal;line-height:1.6;">En attente d'une analyse IA...</div>
         <div class="mini-grid">
@@ -641,8 +637,8 @@ HTML_PAGE = r"""<!DOCTYPE html>
         <div class="market-deck">
           <div class="market-box">
             <div class="panel-title" style="margin-bottom:8px;">Marché live</div>
-            <div id="pair-sparkline" class="sparkline-box"><span class="refresh-info">Aucune paire analysée</span></div>
-            <div id="pair-market-note" class="market-note">Le graphique montrera uniquement la paire sélectionnée.</div>
+            <div id="pair-sparkline" class="sparkline-box"><span class="refresh-info">Aucune donnée XAUUSDm</span></div>
+            <div id="pair-market-note" class="market-note">Le graphique montre uniquement XAUUSDm.</div>
           </div>
           <div class="market-box">
             <div class="panel-title" style="margin-bottom:8px;">Forces de l'analyse</div>
@@ -751,10 +747,6 @@ HTML_PAGE = r"""<!DOCTYPE html>
           <input id="scalp-tp-atr" type="number" min="0.5" max="5.0" step="0.1" oninput="scheduleAutoSave()" />
         </div>
         <div class="field">
-          <label>Spread max Forex (p)</label>
-          <input id="scalp-spread-forex" type="number" min="0.5" max="5.0" step="0.1" oninput="scheduleAutoSave()" />
-        </div>
-        <div class="field">
           <label>Spread max Gold (p)</label>
           <input id="scalp-spread-gold" type="number" min="5" max="80" step="1" oninput="scheduleAutoSave()" />
         </div>
@@ -816,18 +808,18 @@ HTML_PAGE = r"""<!DOCTYPE html>
   </div>
   <div class="ai-exchange" style="margin-bottom:16px;" id="scanner-panel">
     <div class="ai-exchange-header" onclick="toggleScanner()">
-      <span class="panel-title">🔍 Scanner de Paires Dynamique</span>
+      <span class="panel-title">🔍 Scanner XAUUSDm</span>
       <span id="scanner-badge" style="padding:2px 8px;border-radius:4px;font-size:0.75em;margin-left:8px;background:var(--accent);color:#fff;">—</span>
       <span class="toggle-arrow" id="scanner-arrow">▼</span>
     </div>
     <div class="ai-exchange-body" id="scanner-body">
       <div style="display:flex;gap:16px;margin-bottom:10px;">
         <div style="flex:1;">
-          <div style="color:var(--green);font-weight:600;margin-bottom:8px;">✅ Paires Sélectionnées</div>
+          <div style="color:var(--green);font-weight:600;margin-bottom:8px;">✅ XAU retenu</div>
           <div id="scan-selected" style="font-size:0.85em;">—</div>
         </div>
         <div style="flex:1;">
-          <div style="color:var(--red);font-weight:600;margin-bottom:8px;">❌ Paires Rejetées (spread)</div>
+          <div style="color:var(--red);font-weight:600;margin-bottom:8px;">❌ XAU rejeté (spread)</div>
           <div id="scan-rejected" style="font-size:0.85em;color:var(--muted);">—</div>
         </div>
       </div>
@@ -838,7 +830,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
   <!-- TRENDING PAIRS PANEL -->
   <div class="ai-exchange" style="margin-bottom:16px;" id="trending-panel">
     <div class="ai-exchange-header" onclick="toggleTrending()">
-      <span class="panel-title">📈 Paires en Tendance (Analyse Silencieuse)</span>
+      <span class="panel-title">📈 Tendance XAUUSDm</span>
       <span id="trending-badge" style="padding:2px 8px;border-radius:4px;font-size:0.75em;margin-left:8px;background:var(--green);color:#000;">—</span>
       <span class="toggle-arrow" id="trending-arrow">▼</span>
     </div>
@@ -1359,19 +1351,14 @@ function colorVal(el, val) {
 
 function populateSettings(data) {
   const settings = data.settings || {};
-  const preferredSymbols = Array.isArray(settings.preferred_symbols)
-    ? settings.preferred_symbols.join(',')
-    : String(settings.preferred_symbols || '');
-  document.getElementById('setting-preferred-symbols').value = preferredSymbols;
-  document.getElementById('setting-max-symbols').value = settings.max_symbols_per_cycle || 3;
   document.getElementById('setting-check-interval').value = settings.check_interval_minutes || 15;
   document.getElementById('setting-risk').value = settings.max_risk_per_trade || 0.02;
-  document.getElementById('setting-daily-target').value = coalesce(settings.daily_target, 2.0);
-  document.getElementById('setting-daily-loss').value = coalesce(settings.daily_loss_limit, -5.0);
-  document.getElementById('setting-max-positions').value = settings.max_open_positions || 2;
+  document.getElementById('setting-daily-target').value = coalesce(settings.daily_target, 5.0);
+  document.getElementById('setting-daily-loss').value = coalesce(settings.daily_loss_limit, -10.0);
+  document.getElementById('setting-max-positions').value = settings.max_open_positions || 1;
   document.getElementById('setting-local-model').value = settings.local_llm_model || 'qwen2.5:3b';
   document.getElementById('setting-local-endpoint').value = settings.local_llm_endpoint || 'http://127.0.0.1:11434/api/generate';
-  document.getElementById('setting-local-timeout').value = coalesce(settings.local_llm_timeout, 120);
+  document.getElementById('setting-local-timeout').value = coalesce(settings.local_llm_timeout, 300);
   document.getElementById('setting-analysis-mode').value = settings.llm_analysis_mode || 'precision';
   document.getElementById('setting-confidence').value = settings.llm_min_confidence || 0.60;
   document.getElementById('setting-max-llm-calls').value = coalesce(settings.max_llm_calls_per_day, 0);
@@ -1392,14 +1379,13 @@ function populateSettings(data) {
   document.getElementById('scalp-ema-slow').value = coalesce(settings.scalp_ema_slow, 21);
   document.getElementById('scalp-stoch-k').value = coalesce(settings.scalp_stoch_k, 5);
   document.getElementById('scalp-stoch-d').value = coalesce(settings.scalp_stoch_d, 3);
-  document.getElementById('scalp-sl-atr').value = coalesce(settings.scalp_sl_atr_mult, 1.0);
-  document.getElementById('scalp-tp-atr').value = coalesce(settings.scalp_tp_atr_mult, 1.8);
-  document.getElementById('scalp-spread-forex').value = coalesce(settings.scalp_max_spread_forex, 1.5);
-  document.getElementById('scalp-spread-gold').value = coalesce(settings.scalp_max_spread_gold, 25.0);
-  document.getElementById('scalp-min-score').value = coalesce(settings.scalp_min_score, 3);
+  document.getElementById('scalp-sl-atr').value = coalesce(settings.scalp_sl_atr_mult, 1.5);
+  document.getElementById('scalp-tp-atr').value = coalesce(settings.scalp_tp_atr_mult, 3.0);
+  document.getElementById('scalp-spread-gold').value = coalesce(settings.scalp_max_spread_gold, 6.0);
+  document.getElementById('scalp-min-score').value = coalesce(settings.scalp_min_score, 5);
   document.getElementById('scalp-kill-zones').value = String(coalesce(settings.scalp_only_kill_zones, true));
-  document.getElementById('scalp-max-per-hour').value = coalesce(settings.scalp_max_trades_per_hour, 4);
-  document.getElementById('scalp-adx-min').value = coalesce(settings.scalp_adx_min_trend, 20);
+  document.getElementById('scalp-max-per-hour').value = coalesce(settings.scalp_max_trades_per_hour, 2);
+  document.getElementById('scalp-adx-min').value = coalesce(settings.scalp_adx_min_trend, 30);
   document.getElementById('require-human-confirmation').value = String(coalesce(settings.require_human_confirmation, false));
   updateStrategyModeUI();
 
@@ -1438,18 +1424,19 @@ function scheduleAutoSave() {
 
 async function saveSettings(silent = false) {
   const payload = {
-    symbol_source_mode: 'visible',
+    symbol_source_mode: 'fixed',
+    symbol_selection_mode: 'fixed',
+    preferred_symbols: 'XAUUSDm',
+    max_symbols_per_cycle: 1,
     ai_provider_requested: 'ollama',
-    preferred_symbols: document.getElementById('setting-preferred-symbols').value,
-    max_symbols_per_cycle: parseInt(document.getElementById('setting-max-symbols').value || '3', 10),
-    check_interval_minutes: parseInt(document.getElementById('setting-check-interval').value || '15', 10),
-    max_risk_per_trade: parseFloat(document.getElementById('setting-risk').value || '0.02'),
-    daily_target: parseFloat(document.getElementById('setting-daily-target').value || '0'),
-    daily_loss_limit: parseFloat(document.getElementById('setting-daily-loss').value || '-5'),
-    max_open_positions: parseInt(document.getElementById('setting-max-positions').value || '2', 10),
+    check_interval_minutes: parseInt(document.getElementById('setting-check-interval').value || '5', 10),
+    max_risk_per_trade: parseFloat(document.getElementById('setting-risk').value || '0.015'),
+    daily_target: parseFloat(document.getElementById('setting-daily-target').value || '5'),
+    daily_loss_limit: parseFloat(document.getElementById('setting-daily-loss').value || '-10'),
+    max_open_positions: parseInt(document.getElementById('setting-max-positions').value || '1', 10),
     local_llm_model: document.getElementById('setting-local-model').value,
     local_llm_endpoint: document.getElementById('setting-local-endpoint').value,
-    local_llm_timeout: parseInt(document.getElementById('setting-local-timeout').value || '120', 10),
+    local_llm_timeout: parseInt(document.getElementById('setting-local-timeout').value || '300', 10),
     llm_analysis_mode: document.getElementById('setting-analysis-mode').value,
     llm_min_confidence: parseFloat(document.getElementById('setting-confidence').value || '0.60'),
     max_llm_calls_per_day: parseInt(document.getElementById('setting-max-llm-calls').value || '0', 10),
@@ -1465,14 +1452,13 @@ async function saveSettings(silent = false) {
     scalp_ema_slow: parseInt(document.getElementById('scalp-ema-slow').value || '21', 10),
     scalp_stoch_k: parseInt(document.getElementById('scalp-stoch-k').value || '5', 10),
     scalp_stoch_d: parseInt(document.getElementById('scalp-stoch-d').value || '3', 10),
-    scalp_sl_atr_mult: parseFloat(document.getElementById('scalp-sl-atr').value || '1.0'),
-    scalp_tp_atr_mult: parseFloat(document.getElementById('scalp-tp-atr').value || '1.8'),
-    scalp_max_spread_forex: parseFloat(document.getElementById('scalp-spread-forex').value || '1.5'),
-    scalp_max_spread_gold: parseFloat(document.getElementById('scalp-spread-gold').value || '25.0'),
-    scalp_min_score: parseInt(document.getElementById('scalp-min-score').value || '3', 10),
+    scalp_sl_atr_mult: parseFloat(document.getElementById('scalp-sl-atr').value || '1.5'),
+    scalp_tp_atr_mult: parseFloat(document.getElementById('scalp-tp-atr').value || '3.0'),
+    scalp_max_spread_gold: parseFloat(document.getElementById('scalp-spread-gold').value || '6.0'),
+    scalp_min_score: parseInt(document.getElementById('scalp-min-score').value || '5', 10),
     scalp_only_kill_zones: document.getElementById('scalp-kill-zones').value === 'true',
-    scalp_max_trades_per_hour: parseInt(document.getElementById('scalp-max-per-hour').value || '4', 10),
-    scalp_adx_min_trend: parseFloat(document.getElementById('scalp-adx-min').value || '20'),
+    scalp_max_trades_per_hour: parseInt(document.getElementById('scalp-max-per-hour').value || '2', 10),
+    scalp_adx_min_trend: parseFloat(document.getElementById('scalp-adx-min').value || '30'),
     require_human_confirmation: document.getElementById('require-human-confirmation').value === 'true',
   };
 
@@ -1512,7 +1498,7 @@ function syncFocusPairs(symbols, trending) {
     if (trendingSyms.length) {
       label.textContent = '📈 Tendance : ' + trendingSyms.map(p => p.symbol + ' (' + (p.direction || '—') + ')').join(', ');
     } else {
-      label.textContent = 'Rotation auto : ' + visible.join(', ');
+      label.textContent = 'Focus XAU : ' + visible.join(', ');
     }
   }
 }
@@ -1703,10 +1689,10 @@ function renderScanner(scan) {
   // Badge
   if (mode === 'smart') {
     badge.style.background = 'var(--accent)';
-    badge.textContent = 'SMART · ' + selected.length + ' paires';
+    badge.textContent = 'XAU · ' + selected.length + ' actif';
   } else if (mode === 'preferred') {
     badge.style.background = '#f39c12'; badge.style.color = '#000';
-    badge.textContent = 'STATIQUE · ' + selected.length + ' paires';
+    badge.textContent = 'FIXE · ' + selected.length + ' actif';
   } else {
     badge.textContent = mode;
   }
@@ -1735,7 +1721,7 @@ function renderScanner(scan) {
   } else {
     selDiv.innerHTML = selected.length > 0
       ? selected.map(s => '<span style="margin-right:6px;">' + s + '</span>').join('')
-      : '<span style="color:var(--muted);">Aucune paire sélectionnée</span>';
+      : '<span style="color:var(--muted);">Aucun XAU retenu</span>';
   }
 
   // Rejected pairs
@@ -1747,7 +1733,7 @@ function renderScanner(scan) {
       '<span style="color:var(--red);">' + coalesce(r.spread, '—') + 'p > ' + coalesce(r.max_spread, '—') + 'p</span></div>'
     ).join('');
   } else {
-    rejDiv.innerHTML = '<span style="color:var(--green);">Aucune paire rejetée</span>';
+    rejDiv.innerHTML = '<span style="color:var(--green);">Aucun rejet XAU</span>';
   }
 
   // Full table
@@ -2013,8 +1999,8 @@ function renderAgentsStatus(agents) {
 async function testAI() {
   if (aiBusy) return;
   aiBusy = true;
-  const symbol = getNextRotationPair() || (((document.getElementById('setting-preferred-symbols').value || '').split(',')[0] || '').trim()) || '';
-  document.getElementById('ai-test-result').textContent = 'Analyse IA de ' + symbol + '...';
+  const symbol = 'XAUUSDm';
+  document.getElementById('ai-test-result').textContent = 'Analyse IA XAUUSDm...';
   try {
     const res = await fetch('/api/test-ai', {
       method: 'POST',
@@ -2072,28 +2058,17 @@ async function fetchStatus() {
     }
 
     // Config active
-    const rawPref = (data.settings && data.settings.preferred_symbols) || '';
-    const prefFilter = Array.isArray(rawPref) ? rawPref.join(', ') : String(rawPref).trim();
-    const filterLabel = prefFilter ? '🎯 ' + prefFilter : '🔍 toutes les paires';
-    document.getElementById('symbol-mode').textContent = filterLabel;
+    document.getElementById('symbol-mode').textContent = '🪙 XAUUSDm';
     document.getElementById('ai-provider').textContent = data.ai_provider || '—';
-    const symList = data.active_symbols || [];
-    const scanInfo = data.smart_scan || {};
-    const rejCount = (scanInfo.rejected || []).length;
-    const candCount = (scanInfo.candidates || []).length;
-    let symText = symList.join(', ') || '—';
-    if (candCount || rejCount) {
-      symText += ' (' + candCount + ' analysées, ' + rejCount + ' rejetées)';
-    }
-    document.getElementById('active-symbols').textContent = symText;
+    document.getElementById('active-symbols').textContent = 'XAUUSDm';
     populateSettings(data);
     renderPendingApprovals(data.pending_approvals || []);
     const allowTrade = String((data.settings && data.settings.allow_trade_execution) || false) === 'true';
     const modeNote = document.getElementById('ai-mode-note');
     if (modeNote) {
       modeNote.textContent = allowTrade
-        ? 'Le cockpit affiche un signal IA en aperçu sur la paire active. Un ordre réel MT5 n\'est envoyé que par le cycle automatique quand toutes les validations sont encore confirmées.'
-        : 'L\'agent autonome analyse la paire active en continu. Active le trading réel démo pour autoriser les ouvertures et fermetures automatiques.';
+        ? 'Le cockpit affiche un signal IA en aperçu sur XAUUSDm. Un ordre réel MT5 n\'est envoyé que par le cycle automatique quand toutes les validations sont encore confirmées.'
+        : 'L\'agent autonome analyse XAUUSDm en continu. Active le trading réel démo pour autoriser les ouvertures et fermetures automatiques.';
     }
     syncFocusPairs(data.active_symbols || [], data.trending_pairs || []);
 
@@ -2417,8 +2392,6 @@ function tick() {
 
 function initAutoSave() {
   [
-    'setting-preferred-symbols',
-    'setting-max-symbols',
     'setting-check-interval',
     'setting-risk',
     'setting-daily-target',
@@ -2434,7 +2407,7 @@ function initAutoSave() {
     'setting-allow-trade', 'strategy-mode',
     'scalp-mode', 'scalp-timeframe', 'scalp-ema-fast', 'scalp-ema-slow',
     'scalp-stoch-k', 'scalp-stoch-d', 'scalp-sl-atr', 'scalp-tp-atr',
-    'scalp-spread-forex', 'scalp-spread-gold', 'scalp-min-score',
+    'scalp-spread-gold', 'scalp-min-score',
     'scalp-kill-zones', 'scalp-max-per-hour', 'scalp-adx-min',
     'require-human-confirmation'
   ].forEach(id => {
@@ -2539,7 +2512,7 @@ class Handler(BaseHTTPRequestHandler):
 
                 # Calendar pause check
                 try:
-                    cal_pause = calendar.should_pause_trading("EURUSDm")
+                    cal_pause = calendar.should_pause_trading("XAUUSDm")
                     cal_status = {
                         "news_pause": cal_pause,
                         "upcoming": [],
@@ -2617,17 +2590,12 @@ class Handler(BaseHTTPRequestHandler):
                 market_status = {"reason": "MARCHÉ OUVERT" if market_open else "MARCHÉ FERMÉ (week-end)"}
 
                 account = broker.get_account_summary()
-                pref_raw = runtime_settings.get("preferred_symbols", "")
-                if pref_raw:
-                    raw_str = str(pref_raw).strip().strip("[]").replace("'", "").replace('"', "")
-                    active_symbols = [s.strip() for s in raw_str.split(",") if s.strip()]
-                else:
-                    active_symbols = list(getattr(cfg, "INSTRUMENTS", []))
+                active_symbols = ["XAUUSDm"]
 
-                # Live snapshot for first symbol
+                # Live snapshot XAU
                 live_snapshot = {}
                 try:
-                    sym = focus or (active_symbols[0] if active_symbols else "EURUSDm")
+                    sym = "XAUUSDm"
                     candles = broker.get_candles(sym, "H1", 60)
                     if len(candles) >= 2:
                         closes = [float(c["close"]) for c in candles[-30:]]
@@ -2782,7 +2750,7 @@ class Handler(BaseHTTPRequestHandler):
                 length = int(self.headers.get('Content-Length', '0'))
                 raw = self.rfile.read(length).decode('utf-8') if length else '{}'
                 payload = json.loads(raw)
-                instrument = payload.get('instrument', 'EURUSDm')
+                instrument = payload.get('instrument', 'XAUUSDm')
                 broker = build_broker()
                 candles = broker.get_candles(instrument, 'H1', 100)
                 if len(candles) < 20:

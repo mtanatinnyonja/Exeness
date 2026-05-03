@@ -38,9 +38,26 @@ SCALP_KILL_ZONES = [
 ]
 
 
-def _is_scalp_kill_zone() -> bool:
+def _candle_hour_utc(candle: Dict[str, Any]) -> Optional[int]:
+    raw = candle.get("time") or candle.get("timestamp")
+    if raw is None:
+        return None
+    try:
+        if isinstance(raw, (int, float)):
+            return datetime.fromtimestamp(float(raw), tz=timezone.utc).hour
+        dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).hour
+    except Exception:
+        return None
+
+
+def _is_scalp_kill_zone(reference_candle: Optional[Dict[str, Any]] = None) -> bool:
     """Retourne True si on est dans une Kill Zone autorisée pour le scalping."""
-    hour = datetime.now(timezone.utc).hour
+    hour = _candle_hour_utc(reference_candle or {})
+    if hour is None:
+        hour = datetime.now(timezone.utc).hour
     for start, end in SCALP_KILL_ZONES:
         if start <= hour < end:
             return True
@@ -320,7 +337,7 @@ def calculate_scalp_signal(
     spread_ok = spread_pips <= max_spread
 
     # ── Filtre session ────────────────────────────────────────────────────────
-    in_kill_zone = _is_scalp_kill_zone()
+    in_kill_zone = _is_scalp_kill_zone(candles[-1] if candles else None)
     if only_kill_zones and not in_kill_zone:
         return {**empty, "kill_zone": False, "spread_ok": spread_ok,
                 "reasons": ["hors_kill_zone"]}

@@ -1,8 +1,8 @@
 """
-Grid-search optimizer for Exeness technical parameters.
+Grid-search optimizer for Exeness XAUUSDm technical parameters.
 
 Usage:
-    python optimizer.py EURUSD 30
+    python optimizer.py XAUUSDm 30
 """
 
 from __future__ import annotations
@@ -137,7 +137,7 @@ def _default_grid() -> Dict[str, List]:
 
 
 def main() -> int:
-    instrument = sys.argv[1] if len(sys.argv) > 1 else "EURUSDm"
+    instrument = sys.argv[1] if len(sys.argv) > 1 else "XAUUSDm"
     days = int(sys.argv[2]) if len(sys.argv) > 2 else 30
 
     grid = _default_grid()

@@ -26,26 +26,26 @@ class SimulatedAnalystAgent(Agent):
         await self.send_message(
             "*", "signal",
             {
-                "instrument": "EURUSD",
+                "instrument": "XAUUSDm",
                 "direction": "BUY",
                 "score": 4,
                 "details": {"atr_pips": 30}
             }
         )
-        self.log("INFO", "📊 EURUSD: Signal BUY découvert")
+        self.log("INFO", "📊 XAUUSDm: Signal BUY découvert")
         await asyncio.sleep(2)
         
         # Signal 2: SELL
         await self.send_message(
             "*", "signal",
             {
-                "instrument": "XAUUSD",
+                "instrument": "XAUUSDm",
                 "direction": "SELL",
                 "score": 3,
                 "details": {"atr_pips": 20}
             }
         )
-        self.log("INFO", "📊 XAUUSD: Signal SELL découvert")
+        self.log("INFO", "📊 XAUUSDm: Signal SELL découvert")
         await asyncio.sleep(1)
         
         self.running = False
