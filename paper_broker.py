@@ -220,8 +220,10 @@ class PaperBroker:
 
     def _pip_value_per_lot(self, instrument: str) -> float:
         name = str(instrument).upper()
-        if name.startswith(("XAU", "XAG", "BTC", "ETH")):
+        if name.startswith(("BTC", "ETH")):
             return 1.0
+        if name.startswith(("XAU", "XAG")):
+            return 10.0
         return 10.0
 
     def calculate_volume(self, instrument: str, risk_usd: float, sl_pips: float) -> float:

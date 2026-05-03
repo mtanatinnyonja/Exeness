@@ -76,7 +76,19 @@ class AnalystAgent(Agent):
                                 "trending_score": result["score"],
                             })
                     else:
-                        rejected.append({"symbol": instrument, "reason": result.get("reason", "no_signal")})
+                        inst = str(instrument).upper()
+                        if inst.startswith("BTC"):
+                            max_sp = 80.0
+                        elif inst.startswith("XAU"):
+                            max_sp = 35.0
+                        else:
+                            max_sp = 5.0
+                        rejected.append({
+                            "symbol": instrument,
+                            "reason": result.get("reason", "no_signal"),
+                            "spread": round(float(result.get("spread", 0.0) or 0.0), 1),
+                            "max_spread": max_sp,
+                        })
                 await asyncio.sleep(0.1)  # Anti-spam
 
             # Écrire les résultats du scan

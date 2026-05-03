@@ -632,6 +632,7 @@ class MT5Broker:
         return False
 
     def close_position(self, instrument: str) -> Optional[float]:
+        symbol = self._resolve_symbol(instrument)
         positions = self.mt5.positions_get(symbol=symbol) or []
         if not positions:
             return 0.0

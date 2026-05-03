@@ -232,7 +232,6 @@ class ExecutionAgent(Agent):
                 # Log pour monitoring
                 if pnl < -5.0:
                     self.log("WARN", f"{instrument}: Perte ${pnl:.2f}")
-                await self._update_trailing_stop(pos)
         except Exception:
             pass
 

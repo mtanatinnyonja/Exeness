@@ -126,6 +126,9 @@ class TelegramNotifier:
         if wait_s > 0:
             await asyncio.sleep(wait_s)
 
+        self._refresh_config()
+        if not self.bot_token:
+            return
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
 
         def _post():
@@ -502,8 +505,7 @@ class TelegramNotifier:
             url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
             resp = _requests.post(url, json={
                 "chat_id": self.chat_id,
-                "text": "✅ Bot trading connecte a Telegram!",
-                "parse_mode": "MarkdownV2",
+                "text": "✅ Bot trading connecté à Telegram",
             }, timeout=10)
             data = resp.json()
             if data.get("ok"):

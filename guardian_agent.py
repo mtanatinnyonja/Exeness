@@ -4,8 +4,10 @@ Autonome, décide de HOLD/CLOSE/TIGHTEN sur ses propres observations.
 """
 
 import asyncio
+from datetime import datetime, timezone
 from typing import Dict, List
 from agent_framework import Agent
+from economic_calendar import EconomicCalendar
 from mt5_bridge import build_broker
 from signal_engine import calculate_signal_score, calculate_atr
 from settings import PRIMARY_TIMEFRAME
@@ -17,6 +19,7 @@ class GuardianAgent(Agent):
     def __init__(self):
         super().__init__("GuardianAgent")
         self.broker = build_broker()
+        self.calendar = EconomicCalendar()
         self.check_count = 0
         # Trailing state: instrument → {"breakeven_set": bool, "peak_pnl": float}
         self._position_state: Dict[str, Dict] = {}
@@ -102,8 +105,21 @@ class GuardianAgent(Agent):
                 move_pips = (entry - current) / pip_size if entry > 0 and current > 0 else 0.0
 
             loss_threshold_value = -(atr_pips * pip_size * 2.0)
-            gain_threshold_value = (atr_pips * pip_size * 4.0)
-            trail_threshold_pips = atr_pips * 2.0
+            gain_threshold_pips = max(30.0, atr_pips * 3.0)
+            trail_threshold_pips = atr_pips * 1.0  # RULE B: break-even à +1 ATR
+
+            # Temps d'ouverture
+            now = datetime.now(timezone.utc)
+            age_hours = 0.0
+            try:
+                ts_raw = position.get("timestamp") or position.get("time") or ""
+                if ts_raw:
+                    opened_at = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+                    if opened_at.tzinfo is None:
+                        opened_at = opened_at.replace(tzinfo=timezone.utc)
+                    age_hours = (now - opened_at).total_seconds() / 3600
+            except Exception:
+                pass
             
             action = "HOLD"
             reason = "position stable"
@@ -122,10 +138,10 @@ class GuardianAgent(Agent):
                 action = "CLOSE"
                 reason = f"perte ATR: ${unrealized_pnl:.2f} < ${loss_threshold_value:.2f}"
 
-            # 3. Seuil gain relatif ATR (valeur) → CLOSE part prudence Guardian
-            elif unrealized_pnl > gain_threshold_value:
+            # 3. Seuil gain en pips (min 30p) → CLOSE
+            elif move_pips > gain_threshold_pips:
                 action = "CLOSE"
-                reason = f"gain ATR: ${unrealized_pnl:.2f} > ${gain_threshold_value:.2f}"
+                reason = f"gain target atteint ({move_pips:.1f}p > {gain_threshold_pips:.1f}p)"
 
             # 4. Trailing break-even: profit > ATR*2.0, resserrer le SL à l'entrée
             elif (not state["breakeven_set"] and entry > 0 and move_pips >= trail_threshold_pips):
@@ -147,6 +163,38 @@ class GuardianAgent(Agent):
                     if drawdown_ratio > 0.40:
                         action = "CLOSE"
                         reason = f"trailing stop: repli {drawdown_ratio:.0%} depuis peak ${state['peak_pnl']:.2f}"
+
+            # RULE A — Trade inactif depuis > 4h
+            if action == "HOLD" and age_hours > 4 and -5 < move_pips < 10:
+                action = "CLOSE"
+                reason = f"trade inactif depuis {age_hours:.1f}h (move={move_pips:.1f}p)"
+
+            # RULE C — Fermeture weekend gap XAU/BTC (vendredi 21h UTC)
+            if action == "HOLD" and now.weekday() == 4 and now.hour >= 21:
+                inst_upper = str(instrument).upper()
+                if inst_upper.startswith(("XAU", "BTC")) and age_hours > 2:
+                    action = "CLOSE"
+                    reason = "fermeture weekend gap (XAU/BTC vendredi 21h UTC)"
+
+            # RULE D — Fermeture avant news économiques
+            if action == "HOLD":
+                try:
+                    news = self.calendar.should_pause_trading(instrument)
+                    if news.get("pause") and unrealized_pnl > 0:
+                        action = "CLOSE"
+                        reason = f"fermeture avant news: {news['reason']}"
+                    elif news.get("pause") and unrealized_pnl < -(atr_pips * pip_size * 0.5):
+                        action = "CLOSE"
+                        reason = f"fermeture avant news (perte): {news['reason']}"
+                except Exception:
+                    pass
+
+            # RULE E — Fin session NY (≥21h30 UTC), position non convaincante
+            if action == "HOLD":
+                ny_close = (now.hour == 21 and now.minute >= 30) or now.hour == 22
+                if ny_close and move_pips < atr_pips * 1.5:
+                    action = "CLOSE"
+                    reason = f"fin session NY, position non convaincante ({move_pips:.1f}p)"
 
             # Log
             emoji = {"HOLD": "✅", "CLOSE": "🔴", "TIGHTEN": "🔄"}.get(action, "?")

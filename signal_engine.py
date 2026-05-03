@@ -807,7 +807,8 @@ def calculate_signal_score(candles: List[Dict], instrument: str = "") -> Dict:
         rr = max(rr_buy, rr_sell)
 
     details["signal_bias"] = round(bullish_signals - bearish_signals, 2)
-    details["quality_score"] = round((score / 5) * min(1.5, max(rr, 0.5)), 2)
+    rr_for_quality = rr if rr > 0 else 1.0
+    details["quality_score"] = round((score / 5) * min(1.5, max(rr_for_quality, 0.5)), 2)
     details["mtf_confirmed"] = False
     details["human_summary"] = build_human_analysis_summary(details, direction, score)
 
