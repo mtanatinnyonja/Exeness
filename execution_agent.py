@@ -34,7 +34,9 @@ class ExecutionAgent(Agent):
         self.startup_warmup_seconds = 120
         self.min_confidence = 0.55
         self.required_confirmations = 2
-        self.confirmation_window_seconds = 90
+        # Le décideur impose déjà 120s de cooldown par instrument.
+        # La fenêtre de confirmation doit donc rester au-dessus de ce délai.
+        self.confirmation_window_seconds = 180
         self._signal_confirmations = {}
     
     async def on_startup(self):
