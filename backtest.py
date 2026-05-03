@@ -94,14 +94,16 @@ class SimpleBacktester:
         else:
             pips_move = (trade["entry"] - exit_price) / pip
 
-        pip_value = self._pip_value_per_lot()
-        spread_cost = self.spread_pips * pip_value * trade["size"]
-        pnl = (pips_move * pip_value * trade["size"]) - spread_cost
+        pip_value = 10.0 * trade["size"]
+        if "XAU" in self.instrument or "BTC" in self.instrument:
+            pip_value = 1.0 * trade["size"]
+        pnl = pips_move * pip_value
+        pnl -= self.spread_pips * pip_value * self._pip_size()  # coût du spread
         
         trade["status"] = "closed"
         trade["exit_price"] = exit_price
         trade["spread_pips"] = self.spread_pips
-        trade["spread_cost"] = round(spread_cost, 4)
+        trade["spread_cost"] = round(self.spread_pips * pip_value * self._pip_size(), 4)
         trade["pnl"] = pnl
         trade["close_reason"] = reason
         
@@ -145,36 +147,32 @@ class SimpleBacktester:
             print(f"[BACKTEST] Données insuffisantes: {len(candles)} < {min_window}")
             return self._compute_stats()
 
-        for i in range(min_window - 1, len(candles)):
-            candle = candles[i]
-            prev_candle = candles[i - 1] if i > 0 else None
-            self.simulate_candle(candle, prev_candle)
-
-            has_open_trade = any(t.get("status") == "open" for t in self.trades)
-            if has_open_trade:
+        window = []
+        for i, candle in enumerate(candles):
+            window.append(candle)
+            if len(window) < 60:
                 continue
+            if len(window) > 200:
+                window = window[-200:]
 
-            window = candles[i - min_window + 1:i + 1]
-            signal = calculate_signal_score(window, self.instrument)
-            score = int(signal.get("score", 0) or 0)
-            direction = signal.get("direction")
-            if score < int(score_threshold) or direction not in {"BUY", "SELL"}:
-                continue
+            self.simulate_candle(candle, candles[i - 1] if i > 0 else None)
 
-            entry = float(candle.get("close", 0.0))
-            pip = self._pip_size()
-            atr_pips = float(signal.get("atr_pips", 0.0) or 0.0)
-            stop_pips = max(6.0, atr_pips)
-            take_pips = max(8.0, stop_pips * 1.5)
-
-            if direction == "BUY":
-                sl = entry - (stop_pips * pip)
-                tp = entry + (take_pips * pip)
-            else:
-                sl = entry + (stop_pips * pip)
-                tp = entry - (take_pips * pip)
-
-            self._open_trade(direction, entry, sl, tp)
+            open_trades = [t for t in self.trades if t["status"] == "open"]
+            if not open_trades:
+                signal = calculate_signal_score(window, self.instrument)
+                direction = signal.get("direction")
+                score = signal.get("score", 0)
+                if direction and score >= 3:
+                    entry = float(candle["close"])
+                    atr_pips = signal.get("details", {}).get("atr_pips", 20)
+                    pip = self._pip_size()
+                    if direction == "BUY":
+                        sl = entry - atr_pips * pip * 1.5
+                        tp = entry + atr_pips * pip * 3.0
+                    else:
+                        sl = entry + atr_pips * pip * 1.5
+                        tp = entry - atr_pips * pip * 3.0
+                    self._open_trade(direction, entry, sl, tp)
         
         return self._compute_stats()
 

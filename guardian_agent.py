@@ -101,8 +101,8 @@ class GuardianAgent(Agent):
             else:
                 move_pips = (entry - current) / pip_size if entry > 0 and current > 0 else 0.0
 
-            loss_threshold_pips = atr_pips * 2.0
-            gain_threshold_pips = atr_pips * 4.0
+            loss_threshold_value = -(atr_pips * pip_size * 2.0)
+            gain_threshold_value = (atr_pips * pip_size * 4.0)
             trail_threshold_pips = atr_pips * 2.0
             
             action = "HOLD"
@@ -117,15 +117,15 @@ class GuardianAgent(Agent):
                 action = "CLOSE"
                 reason = f"reversal BUY détecté ({signal_score}/5)"
 
-            # 2. Seuil perte relatif ATR (en pips) → CLOSE
-            elif move_pips <= -loss_threshold_pips:
+            # 2. Seuil perte relatif ATR (valeur) → CLOSE
+            elif unrealized_pnl < loss_threshold_value:
                 action = "CLOSE"
-                reason = f"perte ATR: {move_pips:.1f}p <= -{loss_threshold_pips:.1f}p"
+                reason = f"perte ATR: ${unrealized_pnl:.2f} < ${loss_threshold_value:.2f}"
 
-            # 3. Seuil gain relatif ATR (en pips) → CLOSE part prudence Guardian
-            elif move_pips >= gain_threshold_pips:
+            # 3. Seuil gain relatif ATR (valeur) → CLOSE part prudence Guardian
+            elif unrealized_pnl > gain_threshold_value:
                 action = "CLOSE"
-                reason = f"gain ATR: {move_pips:.1f}p >= {gain_threshold_pips:.1f}p"
+                reason = f"gain ATR: ${unrealized_pnl:.2f} > ${gain_threshold_value:.2f}"
 
             # 4. Trailing break-even: profit > ATR*2.0, resserrer le SL à l'entrée
             elif (not state["breakeven_set"] and entry > 0 and move_pips >= trail_threshold_pips):

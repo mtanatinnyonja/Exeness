@@ -14,8 +14,9 @@ from typing import Dict, Optional
 
 try:
     from runtime_db import RuntimeStore
-except Exception:
-    RuntimeStore = None
+    _STORE_AVAILABLE = True
+except ImportError:
+    _STORE_AVAILABLE = False
 
 
 class CircuitBreaker:
@@ -31,105 +32,43 @@ class CircuitBreaker:
         self.daily_max_loss = -5.0  # USD
         self.consecutive_loss_threshold = 3
         self.pause_duration_minutes = 120  # 2h après 3 pertes
-        self.store = None
-
-        try:
-            if RuntimeStore is None:
-                raise RuntimeError("RuntimeStore import indisponible")
-            self.store = RuntimeStore()
-        except Exception as e:
-            self._warn(f"RuntimeStore indisponible, fallback mémoire: {e}")
-
-        self.daily_max_loss = self._load_daily_max_loss(default=-5.0)
-        self.load_state()
+        self._load_state()
 
     def _warn(self, message: str) -> None:
         print(f"[CircuitBreaker][WARN] {message}")
 
-    def _load_daily_max_loss(self, default: float = -5.0) -> float:
-        """Charge le seuil daily max loss depuis RuntimeStore si disponible."""
-        if not self.store:
-            return float(default)
+    def _load_state(self):
+        if not _STORE_AVAILABLE:
+            return
         try:
-            settings = self.store.get_settings()
-            raw = settings.get("daily_max_loss", settings.get("daily_loss_limit", default))
-            value = float(raw)
-            if value > 0:
-                self._warn(f"daily_max_loss positif ({value}), conversion en négatif")
-                value = -abs(value)
-            return value
-        except Exception as e:
-            self._warn(f"Impossible de charger daily_max_loss, fallback {default}: {e}")
-            return float(default)
+            store = RuntimeStore()
+            self.consecutive_losses = int(store.get("cb_consecutive_losses") or 0)
+            self.daily_max_loss = float(store.get("daily_max_loss") or -5.0)
+            pause_str = store.get("cb_pause_until") or ""
+            if pause_str:
+                self.pause_until = datetime.fromisoformat(pause_str)
+                if self.pause_until > datetime.now(timezone.utc):
+                    self.is_active = True
+                    self.pause_reason = store.get("cb_pause_reason") or "restaurée"
+        except Exception:
+            pass  # fallback mémoire silencieux
+
+    def _save_state(self):
+        if not _STORE_AVAILABLE:
+            return
+        try:
+            store = RuntimeStore()
+            store.set("cb_consecutive_losses", str(self.consecutive_losses))
+            store.set("cb_pause_until", self.pause_until.isoformat() if self.pause_until else "")
+            store.set("cb_pause_reason", self.pause_reason)
+        except Exception:
+            pass
 
     def save_state(self) -> None:
-        """Persiste l'état courant du circuit breaker en SQLite via RuntimeStore."""
-        if not self.store:
-            return
-        payload = {
-            "is_active": bool(self.is_active),
-            "pause_reason": self.pause_reason,
-            "pause_until": self.pause_until.isoformat() if self.pause_until else None,
-            "consecutive_losses": int(self.consecutive_losses),
-            "daily_max_loss": float(self.daily_max_loss),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-        try:
-            with self.store._connect() as conn:
-                conn.execute(
-                    "INSERT INTO settings(key, value, updated_at) VALUES (?, ?, ?) "
-                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-                    (
-                        self._STATE_KEY,
-                        json.dumps(payload, ensure_ascii=False),
-                        payload["updated_at"],
-                    ),
-                )
-        except Exception as e:
-            self._warn(f"save_state échoué, fallback mémoire: {e}")
+        self._save_state()
 
     def load_state(self) -> None:
-        """Charge l'état persisté et restaure une pause active si non expirée."""
-        if not self.store:
-            return
-        try:
-            with self.store._connect() as conn:
-                row = conn.execute(
-                    "SELECT value FROM settings WHERE key = ?",
-                    (self._STATE_KEY,),
-                ).fetchone()
-            if not row or not row[0]:
-                return
-
-            state = json.loads(row[0])
-            self.consecutive_losses = int(state.get("consecutive_losses", 0) or 0)
-
-            raw_pause_until = state.get("pause_until")
-            pause_until = None
-            if raw_pause_until:
-                pause_until = datetime.fromisoformat(str(raw_pause_until))
-                if pause_until.tzinfo is None:
-                    pause_until = pause_until.replace(tzinfo=timezone.utc)
-
-            restored_daily = state.get("daily_max_loss")
-            if restored_daily is not None:
-                try:
-                    self.daily_max_loss = float(restored_daily)
-                except Exception:
-                    pass
-
-            if bool(state.get("is_active", False)) and pause_until and datetime.now(timezone.utc) < pause_until:
-                self.is_active = True
-                self.pause_reason = str(state.get("pause_reason", ""))
-                self.pause_until = pause_until
-            else:
-                # Purger pause expirée/invalides tout en conservant le compteur pertes.
-                self.is_active = False
-                self.pause_reason = ""
-                self.pause_until = None
-                self.save_state()
-        except Exception as e:
-            self._warn(f"load_state échoué, fallback mémoire: {e}")
+        self._load_state()
 
     def reset_daily(self):
         """Reset état pour un nouveau jour."""
@@ -154,7 +93,7 @@ class CircuitBreaker:
     def record_loss(self) -> None:
         """Enregistre une perte (fermeture P&L négatif)."""
         self.consecutive_losses += 1
-        self.save_state()
+        self._save_state()
         if self.consecutive_losses >= self.consecutive_loss_threshold:
             self._activate_pause(
                 f"{self.consecutive_losses} pertes consécutives",
@@ -164,7 +103,7 @@ class CircuitBreaker:
     def record_win(self) -> None:
         """Reset compteur pertes après un gain."""
         self.consecutive_losses = 0
-        self.save_state()
+        self._save_state()
 
     def check_daily_loss_exceeded(self, daily_pnl: float) -> bool:
         """Vérifie si la perte journalière dépasse le seuil."""
@@ -207,7 +146,7 @@ class CircuitBreaker:
         self.is_active = True
         self.pause_reason = reason
         self.pause_until = datetime.now(timezone.utc) + timedelta(minutes=duration_minutes)
-        self.save_state()
+        self._save_state()
 
     def get_status(self) -> Dict:
         """Retourne le statut du circuit breaker."""

@@ -124,7 +124,7 @@ class RiskAgent(Agent):
                 return
 
             quality_score = float(details.get("quality_score", 0.0) or 0.0)
-            if quality_score < 0.4:
+            if quality_score < 0.35:
                 await self.send_message(
                     "*",
                     "risk_decision",
@@ -132,7 +132,7 @@ class RiskAgent(Agent):
                         "instrument": instrument,
                         "approved": False,
                         "signal_id": signal_id,
-                        "reason": f"Qualité insuffisante: {quality_score:.2f} < 0.40",
+                        "reason": "qualité signal insuffisante",
                     }
                 )
                 self.log("INFO", f"{instrument}: Bloqué quality_score ({quality_score:.2f})")
@@ -155,7 +155,7 @@ class RiskAgent(Agent):
                     self.log("WARN", f"{instrument}: Bloqué par news")
                     return
             except Exception as e:
-                self.log("WARN", f"Calendrier: {e}")
+                self.log("WARN", f"Calendrier indisponible: {str(e)[:80]}")
             
             # Check protections
             candles = self.broker.get_candles(instrument, "H1", 60)
@@ -182,37 +182,21 @@ class RiskAgent(Agent):
                     self.log("WARN", f"{instrument}: Bloqué par protections")
                     return
             
-            # Approuver le signal avec SL/TP basés sur niveaux S/R + plancher ATR
-            details = signal_data.get("details", {}) or {}
-            atr_pips = float(details.get("atr_pips", 0.0) or 0.0)
-            # Fallback si ATR trop faible
-            if atr_pips < 5.0:
-                instrument_upper = str(instrument).upper()
-                if instrument_upper.startswith("BTC"):
-                    atr_pips = 120.0
-                elif instrument_upper.startswith("XAU"):
-                    atr_pips = 30.0
-                else:
-                    atr_pips = 15.0
+            # Approuver le signal avec score/SL/TP dynamiques
+            details = signal_data.get("details", {})
+            quality = signal_data.get("details", {}).get("quality_score", 0.5)
+            sig_score = signal_data.get("score", 3)
+            risk_score = max(1, min(5, round(sig_score * quality * 2)))
 
-            distance_to_support = float(details.get("distance_to_support_pips", 0.0) or 0.0)
-            distance_to_resistance = float(details.get("distance_to_resistance_pips", 0.0) or 0.0)
-            min_stop_pips = max(atr_pips * 1.0, 6.0)
-
-            if direction_up == "BUY":
-                sl_from_structure = distance_to_support
-                tp_from_structure = distance_to_resistance
+            direction = signal_data.get("direction", "BUY")
+            atr = details.get("atr_pips", 20)
+            if direction == "BUY":
+                sl_pips = int(details.get("distance_to_support_pips", atr * 1.5))
+                tp_pips = int(details.get("distance_to_resistance_pips", atr * 3.0))
             else:
-                sl_from_structure = distance_to_resistance
-                tp_from_structure = distance_to_support
-
-            sl_pips = max(int(round(sl_from_structure)), int(round(min_stop_pips)))
-            tp_pips = max(int(round(tp_from_structure)), int(round(min_stop_pips)))
-
-            rr_component = max(0.0, min(rr / 3.0, 1.0))
-            quality_component = max(0.0, min(quality_score / 1.5, 1.0))
-            risk_score = int(round(1 + (4 * ((0.6 * quality_component) + (0.4 * rr_component)))))
-            risk_score = max(1, min(5, risk_score))
+                sl_pips = int(details.get("distance_to_resistance_pips", atr * 1.5))
+                tp_pips = int(details.get("distance_to_support_pips", atr * 3.0))
+            sl_pips = max(sl_pips, int(atr * 1.0))  # minimum de sécurité
 
             await self.send_message(
                 "*",
