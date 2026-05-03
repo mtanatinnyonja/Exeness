@@ -104,7 +104,7 @@ class GuardianAgent(Agent):
             else:
                 move_pips = (entry - current) / pip_size if entry > 0 and current > 0 else 0.0
 
-            loss_threshold_value = -(atr_pips * pip_size * 2.0)
+            loss_threshold_pips = -(atr_pips * 2.0)
             gain_threshold_pips = max(30.0, atr_pips * 3.0)
             trail_threshold_pips = atr_pips * 1.0  # RULE B: break-even à +1 ATR
 
@@ -133,10 +133,10 @@ class GuardianAgent(Agent):
                 action = "CLOSE"
                 reason = f"reversal BUY détecté ({signal_score}/5)"
 
-            # 2. Seuil perte relatif ATR (valeur) → CLOSE
-            elif unrealized_pnl < loss_threshold_value:
+            # 2. Seuil perte relatif ATR (pips) → CLOSE
+            elif move_pips < loss_threshold_pips:
                 action = "CLOSE"
-                reason = f"perte ATR: ${unrealized_pnl:.2f} < ${loss_threshold_value:.2f}"
+                reason = f"perte ATR: {move_pips:.1f}p < {loss_threshold_pips:.1f}p"
 
             # 3. Seuil gain en pips (min 30p) → CLOSE
             elif move_pips > gain_threshold_pips:
@@ -190,7 +190,8 @@ class GuardianAgent(Agent):
                     pass
 
             # RULE E — Fin session NY (≥21h30 UTC), position non convaincante
-            if action == "HOLD":
+            # Exclure vendredi: Rule C gère déjà XAU/BTC, évite doublons sur le bus
+            if action == "HOLD" and now.weekday() != 4:
                 ny_close = (now.hour == 21 and now.minute >= 30) or now.hour == 22
                 if ny_close and move_pips < atr_pips * 1.5:
                     action = "CLOSE"
