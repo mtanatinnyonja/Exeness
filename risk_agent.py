@@ -9,6 +9,9 @@ from agent_framework import Agent
 from market_protection import run_all_protections
 from economic_calendar import EconomicCalendar
 from mt5_bridge import build_broker
+from learning_store import AgentMemory
+from runtime_db import RuntimeStore
+from settings import DAILY_TARGET
 
 
 class RiskAgent(Agent):
@@ -18,6 +21,7 @@ class RiskAgent(Agent):
         super().__init__("RiskAgent")
         self.broker = build_broker()
         self.calendar = EconomicCalendar()
+        self.memory = AgentMemory()
         self.processed_signals = 0
         self.min_signal_score = 3
         self.min_rr = 1.5  # Ratio risque/rendement minimum requis
@@ -58,8 +62,38 @@ class RiskAgent(Agent):
         signal_id = signal_data.get("signal_id", "")
         
         try:
+            # === CONTRÔLE OBJECTIF JOURNALIER ===
+            try:
+                store = RuntimeStore()
+                daily_target = float(store.get("daily_target") or DAILY_TARGET)
+                daily_pnl = self.memory.get_daily_pnl()
+            except Exception:
+                daily_target = DAILY_TARGET
+                daily_pnl = 0.0
+
+            if daily_target > 0 and daily_pnl >= daily_target:
+                await self.send_message(
+                    "*",
+                    "risk_decision",
+                    {
+                        "instrument": instrument,
+                        "approved": False,
+                        "signal_id": signal_id,
+                        "reason": f"Objectif journalier atteint ({daily_pnl:+.2f}$ / {daily_target:.2f}$) — pause jusqu'à demain",
+                    }
+                )
+                self.log("INFO", f"{instrument}: Bloqué — objectif journalier atteint ({daily_pnl:+.2f}$)")
+                return
+
+            # Mode conservateur : 75%-100% du target atteint → filtre plus strict
+            conservative_mode = daily_target > 0 and daily_pnl >= daily_target * 0.75
+            effective_min_score = 4 if conservative_mode else self.min_signal_score
+            effective_min_rr = 2.0 if conservative_mode else self.min_rr
+            if conservative_mode:
+                self.log("INFO", f"{instrument}: Mode conservateur ({daily_pnl:+.2f}$ / {daily_target:.2f}$) — score≥4, RR≥2.0")
+
             score = int(signal_data.get("score", 0) or 0)
-            if score < self.min_signal_score:
+            if score < effective_min_score:
                 await self.send_message(
                     "*",
                     "risk_decision",
@@ -109,7 +143,7 @@ class RiskAgent(Agent):
             direction_up = str(direction).upper()
             rr_key = "rr_buy" if direction_up == "BUY" else "rr_sell"
             rr = float(details.get(rr_key, 0.0) or 0.0)
-            if 0 < rr < self.min_rr:
+            if 0 < rr < effective_min_rr:
                 await self.send_message(
                     "*",
                     "risk_decision",
@@ -117,7 +151,7 @@ class RiskAgent(Agent):
                         "instrument": instrument,
                         "approved": False,
                         "signal_id": signal_id,
-                        "reason": f"RR insuffisant: {rr:.2f} < {self.min_rr}",
+                        "reason": f"RR insuffisant: {rr:.2f} < {effective_min_rr}",
                     }
                 )
                 self.log("INFO", f"{instrument}: Bloqué RR {rr:.2f}")
