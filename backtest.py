@@ -16,8 +16,18 @@ from typing import List, Dict, Optional
 try:
     from mt5_bridge import build_broker
     from signal_engine import calculate_mtf_signal, calculate_signal_score
+    from scalping_strategy import calculate_scalp_signal
     from learning_store import AgentMemory
     from runtime_db import RuntimeStore
+    from settings import (
+        INITIAL_CAPITAL,
+        MAX_RISK_PER_TRADE,
+        MAX_TRADES_PER_DAY,
+        TRADE_COOLDOWN_MINUTES,
+        STRATEGY_MODE,
+        SCALP_TIMEFRAME,
+        MAX_SPREAD_FILTER_GOLD,
+    )
 except ImportError as e:
     print(f"[BACKTEST] Import error: {e}")
     sys.exit(1)
@@ -46,21 +56,112 @@ class SimpleBacktester:
         self.broker = broker
         self.instrument = instrument
         self.trades: List[Dict] = []
-        self.balances: List[float] = [100.0]
+        self.balances: List[float] = [float(INITIAL_CAPITAL)]
         self.spread_pips: float = 1.5
         self.memory = AgentMemory()
         self.store = RuntimeStore()
+        try:
+            self.runtime_settings = self.store.get_settings()
+        except Exception:
+            self.runtime_settings = {}
         # Cooldown entre trades (Rule 5)
         self._last_trade_close_time: Optional[datetime] = None
-        self.cooldown_minutes: int = 30
+        self.cooldown_minutes: int = int(TRADE_COOLDOWN_MINUTES)
         # Compteur journalier (Rule 8)
         self._trades_today: Dict[str, int] = {}
+
+    def _classic_candidate(self, signal: Dict, signal_confirm: Optional[Dict]) -> Optional[Dict]:
+        direction = signal.get("direction")
+        score = int(signal.get("score", 0) or 0)
+        if direction not in ("BUY", "SELL") or score < 3:
+            return None
+
+        confirm_ok = True
+        if signal_confirm and isinstance(signal_confirm, dict):
+            confirm_dir = signal_confirm.get("direction")
+            confirm_score = int(signal_confirm.get("score", 0) or 0)
+            confirm_ok = confirm_dir == direction and confirm_score >= max(2, score - 1)
+
+        if not confirm_ok:
+            return None
+
+        return {
+            "source": "classic",
+            "direction": direction,
+            "score": min(score, 5),
+            "details": signal.get("details", {}) or {},
+            "signal_confirm": signal_confirm,
+        }
+
+    def _scalp_candidate(self, scalp_signal: Dict) -> Optional[Dict]:
+        direction = scalp_signal.get("signal")
+        raw_score = int(scalp_signal.get("score", 0) or 0)
+        if direction not in ("BUY", "SELL") or raw_score <= 0:
+            return None
+
+        sl_pips = float(scalp_signal.get("sl_pips", 0.0) or 0.0)
+        tp_pips = float(scalp_signal.get("tp_pips", 0.0) or 0.0)
+        rr = round(tp_pips / sl_pips, 2) if sl_pips > 0 else 0.0
+        quality_score = round(min(1.0, max(0.35, raw_score / 6.0)), 2)
+        details = dict(scalp_signal.get("details", {}) or {})
+        details.update({
+            "atr_pips": float(scalp_signal.get("atr_pips", 0.0) or 0.0),
+            "quality_score": quality_score,
+            "signal_source": "scalping",
+            "scalp_mode": scalp_signal.get("mode", "momentum"),
+            "scalp_reasons": scalp_signal.get("reasons", []),
+            "distance_to_support_pips": sl_pips if direction == "BUY" else tp_pips,
+            "distance_to_resistance_pips": tp_pips if direction == "BUY" else sl_pips,
+            "rr_buy": rr if direction == "BUY" else 0.0,
+            "rr_sell": rr if direction == "SELL" else 0.0,
+        })
+        return {
+            "source": "scalping",
+            "direction": direction,
+            "score": min(raw_score, 5),
+            "details": details,
+            "signal_confirm": None,
+        }
+
+    def _select_candidate(self, classic: Optional[Dict], scalp: Optional[Dict]) -> Optional[Dict]:
+        mode = str(self.runtime_settings.get("strategy_mode", STRATEGY_MODE)).strip().lower()
+        if mode == "classic":
+            return classic
+        if mode == "scalping":
+            return scalp
+        if classic and scalp:
+            if classic["direction"] != scalp["direction"]:
+                return None
+            merged_details = dict(classic.get("details", {}) or {})
+            merged_details.update(scalp.get("details", {}) or {})
+            merged_details["signal_source"] = "hybrid"
+            return {
+                "source": "hybrid",
+                "direction": classic["direction"],
+                "score": min(max(int(classic["score"]), int(scalp["score"])) + 1, 5),
+                "details": merged_details,
+                "signal_confirm": classic.get("signal_confirm"),
+            }
+        return classic or scalp
+
+    def _live_volume(self, balance: float, sl_pips: float) -> float:
+        risk_usd = float(balance) * float(MAX_RISK_PER_TRADE)
+        pip_value_per_lot = 1.0
+        lot = risk_usd / max(float(sl_pips) * pip_value_per_lot, 0.01)
+        return max(0.01, min(0.50, round(lot / 0.01) * 0.01))
 
     # ── Données historiques ──────────────────────────────────────────────────
 
     def load_historical_data(self, days: int = 10) -> Dict[str, List[Dict]]:
-        """Charge M15 (signal) + H1 (confirmation) + D1 (MTF)."""
-        result: Dict[str, List[Dict]] = {"m15": [], "h1": [], "d1": []}
+        """Charge M5 + M15 + H1 + H4 + D1 pour reproduire le live hybride."""
+        result: Dict[str, List[Dict]] = {"m5": [], "m15": [], "h1": [], "h4": [], "d1": []}
+        scalp_tf = str(self.runtime_settings.get("scalp_timeframe", SCALP_TIMEFRAME)).strip().upper() or SCALP_TIMEFRAME
+        if scalp_tf == "M5":
+            try:
+                result["m5"] = self.broker.get_candles(self.instrument, "M5", days * 24 * 12 + 100)
+                print(f"[BACKTEST] M5:  {len(result['m5'])} candles")
+            except Exception as e:
+                print(f"[BACKTEST] Erreur M5 (non bloquant): {e}")
         try:
             result["m15"] = self.broker.get_candles(self.instrument, "M15", days * 96)
             print(f"[BACKTEST] M15: {len(result['m15'])} candles")
@@ -79,6 +180,12 @@ class SimpleBacktester:
         except Exception as e:
             print(f"[BACKTEST] Erreur D1 (non bloquant): {e}")
 
+        try:
+            result["h4"] = self.broker.get_candles(self.instrument, "H4", days * 6 + 60)
+            print(f"[BACKTEST] H4:  {len(result['h4'])} candles")
+        except Exception as e:
+            print(f"[BACKTEST] Erreur H4 (non bloquant): {e}")
+
         return result
 
     # ── Helpers instrument ───────────────────────────────────────────────────
@@ -95,10 +202,10 @@ class SimpleBacktester:
 
     def _pip_value_per_lot(self) -> float:
         inst = self.instrument.upper()
+        if inst.startswith(("XAU", "XAG")):
+            return 1.0
         if inst.startswith(("BTC", "ETH")):
             return 1.0
-        if inst.startswith(("XAU", "XAG")):
-            return 10.0
         return 10.0
 
     def _auto_spread(self) -> float:
@@ -192,8 +299,11 @@ class SimpleBacktester:
         print(f"\n[BACKTEST] {self.instrument} | {days} jours | spread={self.spread_pips}p")
 
         data = self.load_historical_data(days)
+        strategy_mode = str(self.runtime_settings.get("strategy_mode", STRATEGY_MODE)).strip().lower()
         candles_m15 = data["m15"]
+        candles_m5 = data["m5"]
         candles_h1 = data["h1"]
+        candles_h4 = data["h4"]
         candles_d1 = data["d1"]
 
         if len(candles_m15) < 60:
@@ -201,10 +311,14 @@ class SimpleBacktester:
             return self._compute_stats(days)
 
         win_m15: List[Dict] = []
+        win_m5: List[Dict] = []
         win_h1: List[Dict] = []
+        win_h4: List[Dict] = []
 
         # Index H1 par position approximative (chaque M15 → avance dans H1)
         h1_cursor = 0
+        h4_cursor = 0
+        m5_cursor = 0
 
         for i, candle in enumerate(candles_m15):
             candle_time = _parse_candle_time(candle)
@@ -218,6 +332,24 @@ class SimpleBacktester:
                     else:
                         break
                 win_h1 = candles_h1[:h1_cursor + 1][-100:]
+
+            if candles_h4 and candle_time:
+                while h4_cursor + 1 < len(candles_h4):
+                    next_h4_time = _parse_candle_time(candles_h4[h4_cursor + 1])
+                    if next_h4_time and next_h4_time <= candle_time:
+                        h4_cursor += 1
+                    else:
+                        break
+                win_h4 = candles_h4[:h4_cursor + 1][-60:]
+
+            if candles_m5 and candle_time:
+                while m5_cursor + 1 < len(candles_m5):
+                    next_m5_time = _parse_candle_time(candles_m5[m5_cursor + 1])
+                    if next_m5_time and next_m5_time <= candle_time:
+                        m5_cursor += 1
+                    else:
+                        break
+                win_m5 = candles_m5[:m5_cursor + 1][-100:]
 
             win_m15.append(candle)
             if len(win_m15) > 200:
@@ -239,28 +371,38 @@ class SimpleBacktester:
             if candle_time and not self._is_trading_session(candle_time):
                 continue
 
-            # Rule 5 — cooldown 30 minutes
+            # Cooldown live
             if candle_time and self._last_trade_close_time is not None:
                 elapsed = (candle_time - self._last_trade_close_time).total_seconds() / 60
                 if elapsed < self.cooldown_minutes:
                     continue
 
-            # Rule 8 — max 4 trades/jour
+            # Limite journalière live
             if candle_time:
                 date_key = candle_time.strftime("%Y-%m-%d")
-                if self._trades_today.get(date_key, 0) >= 4:
+                if self._trades_today.get(date_key, 0) >= int(MAX_TRADES_PER_DAY):
                     continue
 
-            # Rule 2 — signal via calculate_mtf_signal (même que AnalystAgent)
+            # Signal live: H1+D1 (classic) + M15 confirm + M5 scalp
             try:
-                window_h1 = win_h1 if len(win_h1) >= 20 else []
-                if window_h1:
-                    signal = calculate_mtf_signal(win_m15, candles_d1, self.instrument)
-                else:
-                    signal = calculate_signal_score(win_m15, self.instrument)
+                spread = float(self.spread_pips)
+                classic_signal = calculate_mtf_signal(win_h1, candles_d1, self.instrument, candles_h4=win_h4) if len(win_h1) >= 20 else {}
+                signal_confirm = calculate_signal_score(win_m15, self.instrument) if len(win_m15) >= 20 else None
+                scalp_signal = None
+                if strategy_mode in {"scalping", "hybrid"} and len(win_m5) >= 30:
+                    scalp_signal = calculate_scalp_signal(
+                        win_m5,
+                        instrument=self.instrument,
+                        spread_pips=spread,
+                        config=self.runtime_settings,
+                    )
+                signal = self._select_candidate(
+                    self._classic_candidate(classic_signal or {}, signal_confirm),
+                    self._scalp_candidate(scalp_signal or {}),
+                ) or {}
             except Exception:
                 try:
-                    signal = calculate_signal_score(win_m15, self.instrument)
+                    signal = self._classic_candidate(calculate_signal_score(win_m15, self.instrument), None) or {}
                 except Exception:
                     continue
 
@@ -270,10 +412,14 @@ class SimpleBacktester:
             adx = float(details.get("adx", 0) or 0)
             quality = float(details.get("quality_score", 0) or 0)
 
-            # Rule 6 — filtres qualité (score, ADX, quality_score)
+            # Filtres live risk/routing
             if not direction or direction == "WAIT":
                 continue
-            if score < 3 or adx < 18 or quality < 0.35:
+            rr_key = "rr_buy" if direction == "BUY" else "rr_sell"
+            rr = float(details.get(rr_key, 0.0) or 0.0)
+            if spread > float(MAX_SPREAD_FILTER_GOLD):
+                continue
+            if score < 3 or adx < 18 or quality < 0.35 or (0 < rr < 1.5):
                 continue
 
             # Ouvrir le trade
@@ -284,13 +430,23 @@ class SimpleBacktester:
             atr_pips = float(details.get("atr_pips", 20) or 20)
             pip = self._pip_size()
             if direction == "BUY":
-                sl = entry - atr_pips * pip * 1.5
-                tp = entry + atr_pips * pip * 3.0
+                sl_pips = int(details.get("distance_to_support_pips", atr_pips * 1.5))
+                tp_pips = int(details.get("distance_to_resistance_pips", atr_pips * 3.0))
             else:
-                sl = entry + atr_pips * pip * 1.5
-                tp = entry - atr_pips * pip * 3.0
+                sl_pips = int(details.get("distance_to_resistance_pips", atr_pips * 1.5))
+                tp_pips = int(details.get("distance_to_support_pips", atr_pips * 3.0))
+            sl_pips = max(sl_pips, max(15, int(atr_pips * 1.0)))
+            tp_pips = max(tp_pips, sl_pips * 2)
 
-            self._open_trade(direction, entry, sl, tp, candle_time or datetime.now(timezone.utc))
+            if direction == "BUY":
+                sl = entry - sl_pips * pip
+                tp = entry + tp_pips * pip
+            else:
+                sl = entry + sl_pips * pip
+                tp = entry - tp_pips * pip
+
+            size = self._live_volume(self.balances[-1], sl_pips)
+            self._open_trade(direction, entry, sl, tp, candle_time or datetime.now(timezone.utc), size=size)
 
         # Fermer tout trade encore ouvert sur le dernier close
         if self.trades and self.trades[-1]["status"] == "open" and candles_m15:
