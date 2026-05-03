@@ -160,10 +160,10 @@ SCALP_MAX_SPREAD_CRYPTO = float(os.getenv("SCALP_MAX_SPREAD_CRYPTO", "60.0"))
 SCALP_MIN_VOLUME_RATIO = float(os.getenv("SCALP_MIN_VOLUME_RATIO", "1.1"))
 
 # Score minimum pour valider un signal scalping (0-6)
-SCALP_MIN_SCORE = 4  # Score 4+ requis pour XAU (qualité > quantité)
+SCALP_MIN_SCORE = 5  # Score 5+ requis pour éviter les scalps XAU faibles
 
 # ADX minimum en mode MOMENTUM — tendance forte requise pour XAU
-SCALP_ADX_MIN_TREND = 25.0
+SCALP_ADX_MIN_TREND = 30.0
 
 # Forcer les Kill Zones uniquement (London + NY)
 SCALP_ONLY_KILL_ZONES = True

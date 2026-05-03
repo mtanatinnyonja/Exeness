@@ -1382,10 +1382,10 @@ function populateSettings(data) {
   document.getElementById('scalp-sl-atr').value = coalesce(settings.scalp_sl_atr_mult, 1.0);
   document.getElementById('scalp-tp-atr').value = coalesce(settings.scalp_tp_atr_mult, 1.8);
   document.getElementById('scalp-spread-gold').value = coalesce(settings.scalp_max_spread_gold, 25.0);
-  document.getElementById('scalp-min-score').value = coalesce(settings.scalp_min_score, 3);
+  document.getElementById('scalp-min-score').value = coalesce(settings.scalp_min_score, 5);
   document.getElementById('scalp-kill-zones').value = String(coalesce(settings.scalp_only_kill_zones, true));
   document.getElementById('scalp-max-per-hour').value = coalesce(settings.scalp_max_trades_per_hour, 4);
-  document.getElementById('scalp-adx-min').value = coalesce(settings.scalp_adx_min_trend, 20);
+  document.getElementById('scalp-adx-min').value = coalesce(settings.scalp_adx_min_trend, 30);
   document.getElementById('require-human-confirmation').value = String(coalesce(settings.require_human_confirmation, false));
   updateStrategyModeUI();
 
@@ -1455,10 +1455,10 @@ async function saveSettings(silent = false) {
     scalp_sl_atr_mult: parseFloat(document.getElementById('scalp-sl-atr').value || '1.0'),
     scalp_tp_atr_mult: parseFloat(document.getElementById('scalp-tp-atr').value || '1.8'),
     scalp_max_spread_gold: parseFloat(document.getElementById('scalp-spread-gold').value || '25.0'),
-    scalp_min_score: parseInt(document.getElementById('scalp-min-score').value || '3', 10),
+    scalp_min_score: parseInt(document.getElementById('scalp-min-score').value || '5', 10),
     scalp_only_kill_zones: document.getElementById('scalp-kill-zones').value === 'true',
     scalp_max_trades_per_hour: parseInt(document.getElementById('scalp-max-per-hour').value || '4', 10),
-    scalp_adx_min_trend: parseFloat(document.getElementById('scalp-adx-min').value || '20'),
+    scalp_adx_min_trend: parseFloat(document.getElementById('scalp-adx-min').value || '30'),
     require_human_confirmation: document.getElementById('require-human-confirmation').value === 'true',
   };
 
