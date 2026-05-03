@@ -27,7 +27,7 @@ MT5_LOGIN = None            # Laisse vide pour détecter le MT5 déjà ouvert
 MT5_PASSWORD = ""
 MT5_SERVER = ""
 REQUIRE_DEMO_ACCOUNT = True
-ALLOW_TRADE_EXECUTION = False   # Sécurité: paper mode par défaut
+ALLOW_TRADE_EXECUTION = True   # Compte démo Exeness-MT5Trial9 validé
 MT5_MAGIC_NUMBER = 20260414
 MT5_DEVIATION = 20
 

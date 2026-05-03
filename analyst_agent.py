@@ -197,8 +197,14 @@ class AnalystAgent(Agent):
             try:
                 candles_d1 = self.broker.get_candles(instrument, "D1", 100)
             except Exception as e:
-                self.log("WARN", f"{instrument}: D1 indisponible, fallback H1 ({str(e)[:80]})")
-            
+                self.log("WARN", f"{instrument}: D1 indisponible ({str(e)[:80]})")
+
+            candles_h4 = []
+            try:
+                candles_h4 = self.broker.get_candles(instrument, "H4", 60)
+            except Exception:
+                pass
+
             candles_m15 = self.broker.get_candles(instrument, CONFIRM_TIMEFRAME, 60)
             spread = self.broker.get_spread_pips(instrument)
 
@@ -214,7 +220,7 @@ class AnalystAgent(Agent):
                 )
             
             # Calcul du signal
-            signal = calculate_mtf_signal(candles_h1, candles_d1, instrument)
+            signal = calculate_mtf_signal(candles_h1, candles_d1, instrument, candles_h4=candles_h4)
             signal_confirm = None
             if len(candles_m15) >= 20:
                 signal_confirm = calculate_signal_score(candles_m15, instrument)

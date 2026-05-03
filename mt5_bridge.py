@@ -207,7 +207,8 @@ class MT5Broker:
         self.connected = True
         is_demo = self._is_demo_account(account)
         runtime = RuntimeStore().get_settings()
-        self.safe_to_trade = bool(is_demo and runtime.get("allow_trade_execution", ALLOW_TRADE_EXECUTION))
+        # Demo → toujours autorisé. Live → require allow_trade_execution.
+        self.safe_to_trade = True if is_demo else bool(runtime.get("allow_trade_execution", ALLOW_TRADE_EXECUTION))
         server = getattr(account, "server", "")
         company = getattr(account, "company", "")
         login = getattr(account, "login", "")
@@ -413,7 +414,8 @@ class MT5Broker:
         account = self.mt5.account_info()
         runtime = RuntimeStore().get_settings()
         is_demo = self._is_demo_account(account)
-        self.safe_to_trade = bool(is_demo and runtime.get("allow_trade_execution", ALLOW_TRADE_EXECUTION))
+        # Demo → toujours autorisé. Live → require allow_trade_execution.
+        self.safe_to_trade = True if is_demo else bool(runtime.get("allow_trade_execution", ALLOW_TRADE_EXECUTION))
         server = getattr(account, "server", "")
         company = getattr(account, "company", "")
         login = getattr(account, "login", "")
