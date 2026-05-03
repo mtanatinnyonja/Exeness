@@ -131,13 +131,48 @@ class TelegramNotifier:
             return
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
 
-        def _post():
-            return _requests.post(url, json=payload, timeout=10)
+        async def _post_once(req_payload: Dict[str, Any]):
+            def _post():
+                return _requests.post(url, json=req_payload, timeout=10)
+            return await asyncio.to_thread(_post)
 
         try:
-            await asyncio.to_thread(_post)
-        except Exception:
-            pass
+            # Retry court pour erreurs réseau/5xx/429
+            for attempt in range(3):
+                resp = await _post_once(payload)
+                status_code = int(getattr(resp, "status_code", 0) or 0)
+                data = {}
+                try:
+                    data = resp.json() if resp is not None else {}
+                except Exception:
+                    data = {}
+
+                if 200 <= status_code < 300 and bool(data.get("ok", True)):
+                    break
+
+                # Cas fréquent Telegram: erreur de parsing MarkdownV2
+                description = str(data.get("description", "") or "")
+                if (
+                    status_code == 400
+                    and payload.get("parse_mode") == "MarkdownV2"
+                    and "parse" in description.lower()
+                ):
+                    payload_plain = dict(payload)
+                    payload_plain.pop("parse_mode", None)
+                    resp_plain = await _post_once(payload_plain)
+                    status_plain = int(getattr(resp_plain, "status_code", 0) or 0)
+                    if 200 <= status_plain < 300:
+                        print("[TelegramNotifier] markdown parse error: fallback plain text succeeded")
+                        break
+
+                if status_code in (429, 500, 502, 503, 504) and attempt < 2:
+                    await asyncio.sleep(0.8 * (attempt + 1))
+                    continue
+
+                print(f"[TelegramNotifier] sendMessage failed status={status_code} description={description[:220]}")
+                break
+        except Exception as exc:
+            print(f"[TelegramNotifier] sendMessage exception: {exc}")
         finally:
             TelegramNotifier._last_send_ts = asyncio.get_running_loop().time()
 
@@ -209,9 +244,11 @@ class TelegramNotifier:
             return _requests.post(url, json=payload, timeout=10)
 
         try:
-            await asyncio.to_thread(_post)
-        except Exception:
-            pass
+            resp = await asyncio.to_thread(_post)
+            if resp is not None and getattr(resp, "status_code", 0) >= 400:
+                print(f"[TelegramNotifier] answerCallbackQuery failed status={resp.status_code}")
+        except Exception as exc:
+            print(f"[TelegramNotifier] answerCallbackQuery exception: {exc}")
 
     def _format_details_message(self, details: Dict[str, Any]) -> str:
         lines = ["*🔍 Détails signal*", ""]
@@ -236,9 +273,11 @@ class TelegramNotifier:
             # Fallback best-effort si dispatcher async non initialisé.
             try:
                 url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
-                _requests.post(url, json=payload, timeout=10)
-            except Exception:
-                pass
+                resp = _requests.post(url, json=payload, timeout=10)
+                if resp is not None and getattr(resp, "status_code", 0) >= 400:
+                    print(f"[TelegramNotifier] fallback sendMessage failed status={resp.status_code}")
+            except Exception as exc:
+                print(f"[TelegramNotifier] fallback sendMessage exception: {exc}")
             return
 
         def _put_nowait():
@@ -509,7 +548,11 @@ class TelegramNotifier:
             }, timeout=10)
             data = resp.json()
             if data.get("ok"):
-                return {"ok": True, "message_id": data.get("result", {}).get("message_id")}
+                return {
+                    "ok": True,
+                    "message": "Message test envoyé avec succès",
+                    "message_id": data.get("result", {}).get("message_id"),
+                }
             return {"ok": False, "error": data.get("description", "erreur inconnue")}
         except Exception as e:
             return {"ok": False, "error": str(e)}

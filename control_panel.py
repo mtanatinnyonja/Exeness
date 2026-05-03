@@ -1352,7 +1352,7 @@ function colorVal(el, val) {
 function populateSettings(data) {
   const settings = data.settings || {};
   document.getElementById('setting-check-interval').value = settings.check_interval_minutes || 15;
-  document.getElementById('setting-risk').value = settings.max_risk_per_trade || 0.02;
+  document.getElementById('setting-risk').value = settings.max_risk_per_trade || 0.015;
   document.getElementById('setting-daily-target').value = coalesce(settings.daily_target, 5.0);
   document.getElementById('setting-daily-loss').value = coalesce(settings.daily_loss_limit, -10.0);
   document.getElementById('setting-max-positions').value = settings.max_open_positions || 1;
@@ -2032,9 +2032,13 @@ async function testTelegram() {
   const el = document.getElementById('tg-test-result');
   el.textContent = 'Envoi en cours...';
   try {
+    // Assure que les champs token/chat_id modifiés sont bien persistés avant test.
+    await saveSettings(true);
     const res = await fetch('/api/test-telegram', { method: 'POST' });
     const data = await res.json();
-    el.textContent = data.ok ? '✅ ' + data.message : '❌ ' + (data.error || data.message || 'Échec');
+    el.textContent = data.ok
+      ? ('✅ ' + (data.message || 'Message test envoyé'))
+      : ('❌ ' + (data.error || data.message || 'Échec'));
   } catch (e) {
     el.textContent = '❌ Erreur: ' + e.message;
   }
@@ -2763,9 +2767,18 @@ class Handler(BaseHTTPRequestHandler):
                     signal_score=signal.get('score', 0),
                     open_positions=[]
                 )
+                direction = str(signal.get('direction', 'WAIT') or 'WAIT').upper()
+                score = int(signal.get('score', 0) or 0)
+                confidence = max(0.0, min(1.0, score / 5.0))
+                decision = {
+                  "decision": direction if direction in ("BUY", "SELL") else "WAIT",
+                  "confidence": confidence,
+                  "reasoning": f"Signal technique {direction} score {score}/5",
+                }
                 result = {
                     "instrument": instrument,
                     "signal": signal,
+                  "decision": decision,
                     "strategies_summary": strategies.get('summary', '') if isinstance(strategies, dict) else str(strategies)[:200],
                     "spread": broker.get_spread_pips(instrument),
                 }
