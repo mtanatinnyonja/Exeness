@@ -9,8 +9,7 @@ Règles :
 """
 
 from datetime import datetime, timezone, timedelta
-import json
-from typing import Dict, Optional
+from typing import Dict
 
 try:
     from runtime_db import RuntimeStore

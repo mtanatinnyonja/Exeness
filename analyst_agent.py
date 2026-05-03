@@ -9,19 +9,18 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, List
-from agent_framework import Agent, get_message_bus
+from agent_framework import Agent
 from mt5_bridge import build_broker
 from signal_engine import calculate_signal_score, calculate_mtf_signal
 from smart_strategies import build_strategies_context, get_session_score
 from market_context import analyze_market_context
 from learning_store import AgentMemory
 from scalping_strategy import calculate_scalp_signal
-from settings import PRIMARY_TIMEFRAME, CONFIRM_TIMEFRAME, INSTRUMENTS, STRATEGY_MODE, SCALP_TIMEFRAME
+from settings import STRATEGY_MODE, SCALP_TIMEFRAME
 from runtime_db import RuntimeStore
 
 _DATA_DIR = Path("data")
 _SCAN_FILE = _DATA_DIR / "scan_results.json"
-_HB_FILE = _DATA_DIR / "agents_heartbeat.json"
 
 
 class AnalystAgent(Agent):
@@ -35,7 +34,7 @@ class AnalystAgent(Agent):
         self._instruments_override = instruments  # si passé manuellement
         self.cycle_count = 0
         self.last_analysis = {}  # instrument -> timestamp dernière analyse
-        self.min_broadcast_score = 3
+        self.min_broadcast_score = 3  # Score 3+ pour XAU (backtest validé)
 
     def _get_runtime_settings(self) -> Dict[str, Any]:
         try:
@@ -44,15 +43,8 @@ class AnalystAgent(Agent):
             return {}
 
     def _get_instruments(self) -> List[str]:
-        """Lit les paires depuis les paramètres du dashboard (preferred_symbols)."""
-        settings = self._get_runtime_settings()
-        pref_raw = settings.get("preferred_symbols", "")
-        if pref_raw:
-            raw_str = str(pref_raw).strip().strip("[]").replace("'", "").replace('"', "")
-            pairs = [s.strip() for s in raw_str.split(",") if s.strip()]
-            if pairs:
-                return pairs
-        return self._instruments_override or INSTRUMENTS or ["EURUSDm", "XAUUSDm", "BTCUSDm"]
+        """Forcé sur XAUUSDm uniquement."""
+        return ["XAUUSDm"]
 
     def _classic_candidate(self, signal: Dict[str, Any], signal_confirm: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         direction = signal.get("direction")
@@ -179,42 +171,55 @@ class AnalystAgent(Agent):
             # Heartbeat (via base class)
             self.write_heartbeat({"cycle": self.cycle_count})
 
-            # Attendre 30s avant prochain cycle
-            await asyncio.sleep(30)
+            # Attendre 15s avant prochain cycle (XAU bouge vite, scan plus fréquent)
+            await asyncio.sleep(15)
     
     async def _analyze_instrument(self, instrument: str, runtime_settings: Optional[Dict[str, Any]] = None) -> Optional[Dict]:
         """Analyse un instrument et envoie un signal. Retourne le résultat."""
         try:
+            if str(instrument).upper() != "XAUUSDM":
+                self.log("DEBUG", f"{instrument} ignoré — bot spécialisé XAUUSDm uniquement")
+                return None
+
             settings = runtime_settings or {}
             strategy_mode = str(settings.get("strategy_mode", STRATEGY_MODE)).strip().lower()
 
-            # Récupérer les données
-            candles_h1 = self.broker.get_candles(instrument, PRIMARY_TIMEFRAME, 100)
+            # Récupérer les données XAU
+            candles_h1 = self.broker.get_candles("XAUUSDm", "H1", 150)
             if len(candles_h1) < 20:
                 return {"symbol": instrument, "reason": "not_enough_data"}
 
             candles_d1 = []
             try:
-                candles_d1 = self.broker.get_candles(instrument, "D1", 100)
+                candles_d1 = self.broker.get_candles("XAUUSDm", "D1", 100)
             except Exception as e:
-                self.log("WARN", f"{instrument}: D1 indisponible, fallback H1 ({str(e)[:80]})")
-            
-            candles_m15 = self.broker.get_candles(instrument, CONFIRM_TIMEFRAME, 60)
+                self.log("WARN", f"{instrument}: D1 indisponible ({str(e)[:80]})")            
+
+            candles_h4 = []
+            try:
+                candles_h4 = self.broker.get_candles(instrument, "H4", 60)
+            except Exception:
+                pass
+
+            candles_m15 = self.broker.get_candles("XAUUSDm", "M15", 100)
             spread = self.broker.get_spread_pips(instrument)
 
             scalp_signal = None
+            candles_m5 = []
             if strategy_mode in {"scalping", "hybrid"}:
                 scalp_timeframe = str(settings.get("scalp_timeframe", SCALP_TIMEFRAME)).strip().upper() or SCALP_TIMEFRAME
-                candles_scalp = self.broker.get_candles(instrument, scalp_timeframe, 100)
+                candles_m5 = self.broker.get_candles("XAUUSDm", scalp_timeframe, 100)
                 scalp_signal = calculate_scalp_signal(
-                    candles_scalp,
+                    candles_m5,
                     instrument=instrument,
                     spread_pips=spread,
                     config=settings,
                 )
+
+            self.log("INFO", f"XAUUSDm cycle {self.cycle_count} | H1:{len(candles_h1)}c D1:{len(candles_d1)}c M5:{len(candles_m5)}c | Spread:{spread:.1f}p")
             
             # Calcul du signal
-            signal = calculate_mtf_signal(candles_h1, candles_d1, instrument)
+            signal = calculate_mtf_signal(candles_h1, candles_d1, instrument, candles_h4=candles_h4)
             signal_confirm = None
             if len(candles_m15) >= 20:
                 signal_confirm = calculate_signal_score(candles_m15, instrument)
@@ -291,21 +296,3 @@ class AnalystAgent(Agent):
             _SCAN_FILE.write_text(json.dumps(payload, ensure_ascii=False, default=str), encoding="utf-8")
         except Exception as e:
             self.log("ERROR", f"scan_results write: {e}")
-
-    def _write_heartbeat(self):
-        """Met à jour le heartbeat de cet agent dans data/agents_heartbeat.json."""
-        try:
-            hb = {}
-            if _HB_FILE.exists():
-                try:
-                    hb = json.loads(_HB_FILE.read_text(encoding="utf-8"))
-                except Exception:
-                    hb = {}
-            hb[self.name] = {
-                "status": "running",
-                "last_seen": datetime.now(timezone.utc).isoformat(),
-                "cycle": self.cycle_count,
-            }
-            _HB_FILE.write_text(json.dumps(hb, ensure_ascii=False), encoding="utf-8")
-        except Exception:
-            pass

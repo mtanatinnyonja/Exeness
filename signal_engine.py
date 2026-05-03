@@ -321,6 +321,31 @@ def calculate_support_resistance(
     return resistance, support
 
 
+def detect_market_structure(candles: List[Dict], swing_window: int = 5) -> str:
+    """
+    Structure de marché basée sur swing highs/lows (HH/HL vs LH/LL).
+    Retourne 'bullish_structure', 'bearish_structure', ou 'neutral_structure'.
+    Bullish = Higher Highs + Higher Lows. Bearish = Lower Highs + Lower Lows.
+    """
+    if len(candles) < swing_window * 4:
+        return "neutral_structure"
+    highs = [c["high"] for c in candles]
+    lows = [c["low"] for c in candles]
+    pivot_h = _find_pivot_highs(highs, lows, left=swing_window, right=swing_window)
+    pivot_l = _find_pivot_lows(highs, lows, left=swing_window, right=swing_window)
+    if len(pivot_h) < 2 or len(pivot_l) < 2:
+        return "neutral_structure"
+    hh = pivot_h[-1] > pivot_h[-2]  # Higher High
+    hl = pivot_l[-1] > pivot_l[-2]  # Higher Low
+    lh = pivot_h[-1] < pivot_h[-2]  # Lower High
+    ll = pivot_l[-1] < pivot_l[-2]  # Lower Low
+    if hh and hl:
+        return "bullish_structure"
+    if lh and ll:
+        return "bearish_structure"
+    return "neutral_structure"
+
+
 # ---------------------------------------------------------------------------
 # Patterns chandelier
 # ---------------------------------------------------------------------------
@@ -768,11 +793,24 @@ def calculate_signal_score(candles: List[Dict], instrument: str = "") -> Dict:
         bearish_signals += 1
         details["breakout_signal"] = "breakout baissier"
 
+    # --- Proximité S/R : ne pas acheter près résistance, ne pas vendre près support ---
+    sr_range = resistance - support
+    if sr_range > 0:
+        position_in_range = (current_price - support) / sr_range
+        if position_in_range > 0.75:
+            bullish_signals = max(0.0, bullish_signals - 1.2)
+            details["sr_filter"] = f"prix près résistance ({round(position_in_range * 100)}% du range) → BUY pénalisé"
+        elif position_in_range < 0.25:
+            bearish_signals = max(0.0, bearish_signals - 1.2)
+            details["sr_filter"] = f"prix près support ({round(position_in_range * 100)}% du range) → SELL pénalisé"
+        else:
+            details["sr_filter"] = f"zone médiane S/R ({round(position_in_range * 100)}%)"
+
     # --- Patterns chandelier ---
     if candle_pattern == "doji":
-        bullish_signals *= 0.85
-        bearish_signals *= 0.85
-        details["pattern_signal"] = "doji → hésitation / attente"
+        bullish_signals *= 0.3
+        bearish_signals *= 0.3
+        details["pattern_signal"] = "doji → indécision forte, signal annulé"
     elif candle_pattern in ("hammer", "bullish_engulfing"):
         bullish_signals += 1
         details["pattern_signal"] = f"{candle_pattern} → bullish"
@@ -821,61 +859,127 @@ def calculate_signal_score(candles: List[Dict], instrument: str = "") -> Dict:
     }
 
 
-def calculate_mtf_signal(candles_h1: List[Dict], candles_d1: List[Dict], instrument: str = "") -> Dict:
+def calculate_mtf_signal(
+    candles_h1: List[Dict],
+    candles_d1: List[Dict],
+    instrument: str = "",
+    candles_h4: Optional[List[Dict]] = None,
+) -> Dict:
     """
-    Signal multi-timeframe : signal H1 confirmé par tendance D1.
-    Si candles_d1 est None ou vide, se comporte comme calculate_signal_score().
+    Signal multi-timeframe aligné D1 → H4 → H1.
+    Règle principale : jamais contre la tendance D1 (blocage dur).
+    H4 filtre intermédiaire : pénalité si désaligné, bonus si aligné.
+    Structure marché (HH/HL) renforce le score si conforme.
     """
     # Signal principal H1
     signal_h1 = calculate_signal_score(candles_h1, instrument)
 
-    # Si pas de données D1, retourner H1 tel quel avec flag
+    # Si pas de données D1, retourner H1 tel quel
     if not candles_d1 or len(candles_d1) < _MIN_CANDLES:
         signal_h1["mtf_confirmed"] = False
         signal_h1["d1_direction"] = None
         signal_h1["d1_score"] = 0
+        signal_h1["h4_direction"] = None
         signal_h1["confluence"] = "no_d1_data"
+        signal_h1["market_structure"] = "neutral_structure"
         return signal_h1
 
     # Signal D1 (tendance de fond)
     signal_d1 = calculate_signal_score(candles_d1, instrument)
     d1_direction = signal_d1.get("direction")
-    d1_score = signal_d1.get("score", 0)
+    d1_score = int(signal_d1.get("score", 0))
     h1_direction = signal_h1.get("direction")
 
-    # Règles de confluence
-    score = signal_h1.get("score", 0)
-    if h1_direction and d1_direction:
-        if h1_direction == d1_direction:
-            confluence = "aligned"
-            mtf_confirmed = True
-            # Bonus léger si D1 fort
-            if d1_score >= 3:
-                score = min(5, score + 1)
-        else:
-            confluence = "counter"
-            mtf_confirmed = False
-            score = max(0, score - 2)  # pénalité forte contre-tendance
+    # Structure de marché sur D1 (Higher Highs/Lows vs Lower Highs/Lows)
+    market_structure = detect_market_structure(candles_d1) if len(candles_d1) >= 20 else "neutral_structure"
+
+    # Signal H4 (filtre intermédiaire)
+    h4_direction = None
+    h4_score = 0
+    if candles_h4 and len(candles_h4) >= _MIN_CANDLES:
+        signal_h4 = calculate_signal_score(candles_h4, instrument)
+        h4_direction = signal_h4.get("direction")
+        h4_score = int(signal_h4.get("score", 0))
+
+    # ── Règle 1 : blocage dur contre-tendance D1 ─────────────────────────
+    # On ne trade JAMAIS contre la tendance D1 établie.
+    if h1_direction and d1_direction and h1_direction != d1_direction:
+        details = dict(signal_h1.get("details", {}))
+        details.update({
+            "mtf_confluence": "counter_d1_blocked",
+            "d1_direction": d1_direction,
+            "h4_direction": h4_direction,
+            "market_structure": market_structure,
+            "block_reason": f"Signal {h1_direction} H1 bloqué — tendance D1 est {d1_direction}",
+        })
+        result = dict(signal_h1)
+        result.update({
+            "score": 0,
+            "direction": None,
+            "mtf_confirmed": False,
+            "d1_direction": d1_direction,
+            "d1_score": d1_score,
+            "h4_direction": h4_direction,
+            "confluence": "counter_d1_blocked",
+            "market_structure": market_structure,
+            "details": details,
+        })
+        return result
+
+    # ── Règle 2 : score de confluence D1 ──────────────────────────────────
+    score = int(signal_h1.get("score", 0))
+    if h1_direction and d1_direction and h1_direction == d1_direction:
+        confluence = "aligned"
+        mtf_confirmed = True
+        if d1_score >= 3:
+            score = min(5, score + 1)
+        # Bonus si structure de marché conforme (HH/HL ou LH/LL)
+        if (h1_direction == "BUY" and market_structure == "bullish_structure") or \
+           (h1_direction == "SELL" and market_structure == "bearish_structure"):
+            score = min(5, score + 1)
+            confluence = "aligned_structure"
     elif not d1_direction:
-        confluence = "neutral"
+        confluence = "neutral_d1"
         mtf_confirmed = False
-        score = max(0, score - 1)  # pénalité légère marché D1 neutre
+        score = max(0, score - 1)
     else:
         confluence = "neutral"
         mtf_confirmed = False
 
-    # Direction annulée si score trop bas après pénalité
+    # ── Règle 3 : filtre H4 ────────────────────────────────────────────────
+    h4_note = ""
+    if h4_direction and h1_direction:
+        if h4_direction != h1_direction:
+            score = max(0, score - 1)
+            h4_note = f"H4 {h4_direction} ≠ H1 {h1_direction} → pénalité"
+        else:
+            if h4_score >= 3:
+                score = min(5, score + 1)
+            h4_note = f"H4 aligné {h4_direction}"
+
+    # Direction finale annulée si score insuffisant
     direction = h1_direction if score >= 2 else None
 
+    details = dict(signal_h1.get("details", {}))
+    details.update({
+        "mtf_confluence": confluence,
+        "d1_direction": d1_direction,
+        "h4_direction": h4_direction,
+        "h4_note": h4_note,
+        "market_structure": market_structure,
+    })
     result = dict(signal_h1)
-    result["score"] = score
-    result["direction"] = direction
-    result["mtf_confirmed"] = mtf_confirmed
-    result["d1_direction"] = d1_direction
-    result["d1_score"] = d1_score
-    result["confluence"] = confluence
-    result["details"]["mtf_confluence"] = confluence
-    result["details"]["d1_direction"] = d1_direction
+    result.update({
+        "score": score,
+        "direction": direction,
+        "mtf_confirmed": mtf_confirmed,
+        "d1_direction": d1_direction,
+        "d1_score": d1_score,
+        "h4_direction": h4_direction,
+        "confluence": confluence,
+        "market_structure": market_structure,
+        "details": details,
+    })
     return result
 
 

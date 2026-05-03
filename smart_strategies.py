@@ -7,8 +7,8 @@ Stratégies professionnelles avancées.
 - Filtre de corrélation inter-paires
 """
 
-from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Tuple
+from datetime import datetime, timezone
+from typing import Dict, List
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. KILL ZONES / TRADING SESSIONS (ICT)

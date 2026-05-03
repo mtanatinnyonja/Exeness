@@ -1,27 +1,25 @@
 """
-Agent Gardien — Surveille les positions ouvertes en continu.
-Autonome, décide de HOLD/CLOSE/TIGHTEN sur ses propres observations.
+Agent Gardien — Spécialisé XAUUSDm uniquement.
+Surveille la position ouverte en continu et décide HOLD/CLOSE/TIGHTEN.
 """
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Dict, List
+from typing import Dict
 from agent_framework import Agent
 from economic_calendar import EconomicCalendar
 from mt5_bridge import build_broker
 from signal_engine import calculate_signal_score, calculate_atr
-from settings import PRIMARY_TIMEFRAME
 
 
 class GuardianAgent(Agent):
-    """Gardien autonome — Surveille positions, prend décisions HOLD/CLOSE/TIGHTEN."""
+    """Gardien XAUUSDm — Surveille la position or, protège les gains."""
     
     def __init__(self):
         super().__init__("GuardianAgent")
         self.broker = build_broker()
         self.calendar = EconomicCalendar()
         self.check_count = 0
-        # Trailing state: instrument → {"breakeven_set": bool, "peak_pnl": float}
         self._position_state: Dict[str, Dict] = {}
     
     async def on_startup(self):
@@ -69,8 +67,11 @@ class GuardianAgent(Agent):
             self.log("ERROR", f"Check positions: {str(e)[:100]}")
     
     async def _monitor_position(self, position: Dict):
-        """Surveille une position et décide action."""
+        """Surveille la position XAUUSDm et décide action."""
         instrument = position.get("instrument", "?")
+        # Ignorer toute position non-XAU (sécurité)
+        if str(instrument).upper() != "XAUUSDM":
+            return
         direction = str(position.get("direction", "?")).upper()
         entry = float(position.get("entry_price", 0))
         current = float(position.get("current_price", 0))
@@ -84,12 +85,12 @@ class GuardianAgent(Agent):
         state = self._position_state[instrument]
 
         try:
-            # Récupérer candles pour signal + ATR
-            candles = self.broker.get_candles(instrument, PRIMARY_TIMEFRAME, 50)
+            # Récupérer candles H1 XAU pour signal + ATR
+            candles = self.broker.get_candles("XAUUSDm", "H1", 50)
             if len(candles) < 20:
                 return
             
-            signal = calculate_signal_score(candles, instrument)
+            signal = calculate_signal_score(candles, "XAUUSDm")
             signal_direction = signal.get("direction", "WAIT")
             signal_score = signal.get("score", 0)
             atr = float(calculate_atr(candles) or 0)
@@ -169,17 +170,16 @@ class GuardianAgent(Agent):
                 action = "CLOSE"
                 reason = f"trade inactif depuis {age_hours:.1f}h (move={move_pips:.1f}p)"
 
-            # RULE C — Fermeture weekend gap XAU/BTC (vendredi 21h UTC)
+            # RULE C — Fermeture weekend gap XAU (vendredi 21h UTC)
             if action == "HOLD" and now.weekday() == 4 and now.hour >= 21:
-                inst_upper = str(instrument).upper()
-                if inst_upper.startswith(("XAU", "BTC")) and age_hours > 2:
+                if age_hours > 2:
                     action = "CLOSE"
-                    reason = "fermeture weekend gap (XAU/BTC vendredi 21h UTC)"
+                    reason = "fermeture weekend gap XAU (vendredi 21h UTC)"
 
-            # RULE D — Fermeture avant news économiques
+            # RULE D — Fermeture avant news économiques XAU (USD, CPI, NFP, etc.)
             if action == "HOLD":
                 try:
-                    news = self.calendar.should_pause_trading(instrument)
+                    news = self.calendar.should_pause_trading("XAUUSDm")
                     if news.get("pause") and unrealized_pnl > 0:
                         action = "CLOSE"
                         reason = f"fermeture avant news: {news['reason']}"
@@ -199,14 +199,15 @@ class GuardianAgent(Agent):
 
             # Log
             emoji = {"HOLD": "✅", "CLOSE": "🔴", "TIGHTEN": "🔄"}.get(action, "?")
-            self.log("INFO", f"{emoji} {instrument} {direction}: {action} ({reason}) | P&L: ${unrealized_pnl:+.2f}")
+            if action != "HOLD":
+                self.log("INFO", f"{emoji} XAUUSDm {direction}: {action} ({reason}) | P&L: ${unrealized_pnl:+.2f}")
             
             # Envoyer l'action
             if action == "CLOSE":
                 await self.send_message(
                     "ExecutionAgent",
                     "close_position",
-                    {"instrument": instrument, "reason": reason, "unrealized_pnl": unrealized_pnl}
+                    {"instrument": "XAUUSDm", "reason": reason, "unrealized_pnl": unrealized_pnl}
                 )
         
         except Exception as e:

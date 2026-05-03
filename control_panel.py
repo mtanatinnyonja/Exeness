@@ -785,7 +785,35 @@ HTML_PAGE = r"""<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- SMART PAIR SCANNER -->
+  <!-- HUMAN CONFIRMATION GATE -->
+  <div class="panel" style="margin-bottom:16px;" id="panel-human-gate">
+    <div class="panel-header">
+      <span class="panel-title">🔒 Confirmation Humaine</span>
+      <span class="refresh-info">Point d'entrée manuel — approuve ou rejette chaque trade avant exécution</span>
+    </div>
+    <div class="panel-body">
+      <div class="form-grid" style="margin-bottom:14px;">
+        <div class="field">
+          <label>Confirmation humaine requise</label>
+          <select id="require-human-confirmation" onchange="scheduleAutoSave()">
+            <option value="false">non — exécution automatique</option>
+            <option value="true">oui — validation manuelle avant ordre</option>
+          </select>
+        </div>
+        <div class="field" style="grid-column:1/-1;">
+          <div id="human-gate-note" style="padding:10px 12px;border-radius:8px;background:rgba(255,200,50,0.07);border:1px solid rgba(255,200,50,0.3);color:#f59e0b;font-size:12px;line-height:1.5;">
+            Quand activé, chaque signal validé par les agents est mis <strong>en attente</strong> ici. Tu approuves ou rejettes avant tout envoi à MT5.
+          </div>
+        </div>
+      </div>
+
+      <!-- Pending trades -->
+      <div style="color:var(--text);font-weight:600;margin-bottom:8px;font-size:13px;">Trades en attente d'approbation</div>
+      <div id="pending-approvals-list">
+        <div style="color:var(--muted);font-size:12px;">Aucun trade en attente.</div>
+      </div>
+    </div>
+  </div>
   <div class="ai-exchange" style="margin-bottom:16px;" id="scanner-panel">
     <div class="ai-exchange-header" onclick="toggleScanner()">
       <span class="panel-title">🔍 Scanner de Paires Dynamique</span>
@@ -890,6 +918,58 @@ HTML_PAGE = r"""<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- XAUUSDM LIVE PANEL -->
+  <div class="panel" style="margin-bottom:16px;border-color:rgba(255,184,32,0.35);">
+    <div class="panel-header" style="background:rgba(255,184,32,0.05);">
+      <span class="panel-title" style="color:var(--amber)">🪵 XAUUSDm Live</span>
+      <span id="xau-pnl-badge" class="refresh-info" style="font-size:13px;font-weight:700;">—</span>
+    </div>
+    <div class="panel-body">
+      <!-- Prix et spread -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px;">
+        <div class="mini-kpi" style="text-align:left;padding:10px 14px;">
+          <div class="label">Bid</div><div class="value" id="xau-bid" style="color:var(--amber)">—</div>
+        </div>
+        <div class="mini-kpi" style="text-align:left;padding:10px 14px;">
+          <div class="label">Ask</div><div class="value" id="xau-ask" style="color:var(--amber)">—</div>
+        </div>
+        <div class="mini-kpi" style="text-align:left;padding:10px 14px;">
+          <div class="label">Spread</div><div class="value" id="xau-spread">—</div>
+        </div>
+        <div class="mini-kpi" style="text-align:left;padding:10px 14px;">
+          <div class="label">P&amp;L Jour</div><div class="value" id="xau-day-pnl">—</div>
+        </div>
+        <div class="mini-kpi" style="text-align:left;padding:10px 14px;">
+          <div class="label">Trades Jour</div><div class="value" id="xau-day-trades">—</div>
+        </div>
+      </div>
+      <!-- Barre de progression objectif -->
+      <div style="margin-bottom:14px;">
+        <div style="display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;color:var(--muted);margin-bottom:4px;">
+          <span>Progression objectif journalier</span><span id="xau-goal-label">$0.00 / $5.00</span>
+        </div>
+        <div class="api-bar-track"><div class="api-bar-fill" id="xau-goal-bar" style="width:0%"></div></div>
+      </div>
+      <!-- Position ouverte XAU -->
+      <div id="xau-position-wrap" style="display:none;padding:12px;border-radius:10px;background:rgba(255,184,32,0.06);border:1px solid rgba(255,184,32,0.2);margin-bottom:12px;">
+        <div style="font-family:var(--mono);font-size:11px;color:var(--amber);font-weight:600;margin-bottom:8px;">Position ouverte</div>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;font-family:var(--mono);font-size:12px;">
+          <span>Dir: <strong id="xau-pos-dir">—</strong></span>
+          <span>Entrée: <strong id="xau-pos-entry">—</strong></span>
+          <span>P&amp;L: <strong id="xau-pos-pnl">—</strong></span>
+          <span>SL: <strong id="xau-pos-sl">—</strong></span>
+          <span>TP: <strong id="xau-pos-tp">—</strong></span>
+          <span>Lot: <strong id="xau-pos-lot">—</strong></span>
+        </div>
+      </div>
+      <!-- Derniers signaux XAU -->
+      <div>
+        <div style="font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.1em;margin-bottom:6px;">Derniers signaux XAUUSDm</div>
+        <div id="xau-signals-list" style="font-family:var(--mono);font-size:12px;color:var(--muted);">En attente de signal...</div>
+      </div>
+    </div>
+  </div>
+
   <!-- KPIs -->
   <div class="kpi-grid">
     <div class="kpi">
@@ -900,7 +980,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
     <div class="kpi">
       <div class="kpi-label">P&L Aujourd'hui</div>
       <div class="kpi-value" id="daily-pnl">—</div>
-      <div class="kpi-sub" id="daily-pnl-sub">vs objectif $2.00</div>
+      <div class="kpi-sub" id="daily-pnl-sub">vs objectif $5.00</div>
     </div>
     <div class="kpi">
       <div class="kpi-label">P&L Total</div>
@@ -1039,7 +1119,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
 </div>
 
 <script>
-let countdown = 3;
+let countdown = 5;
 let autoAiCountdown = 30;
 let autoSaveTimer = null;
 let autoAiEnabled = true;
@@ -1084,6 +1164,47 @@ function updateStrategyModeUI() {
 
   noteEl.innerHTML = '<strong style="color:var(--text);">hybrid</strong> : ancien moteur + scalping. Le classique travaille en <strong>M15/M5</strong> et les réglages ci-dessous ne concernent que la partie scalping.';
   scalpFieldsEl.style.display = 'contents';
+}
+
+async function approveOrRejectTrade(tradeId, action) {
+  try {
+    const res = await fetch('/api/' + action + '-trade', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: tradeId })
+    });
+    const data = await res.json();
+    if (data.ok) await fetchStatus();
+    else alert('Erreur: ' + (data.error || 'inconnu'));
+  } catch(e) { alert('Erreur réseau: ' + e); }
+}
+
+function renderPendingApprovals(list) {
+  const container = document.getElementById('pending-approvals-list');
+  if (!container) return;
+  if (!list || list.length === 0) {
+    container.innerHTML = '<div style="color:var(--muted);font-size:12px;">Aucun trade en attente.</div>';
+    return;
+  }
+  const rows = list.map(t => {
+    const expires = new Date(t.expires_at);
+    const minutesLeft = Math.max(0, Math.round((expires - Date.now()) / 60000));
+    const confPct = Math.round((t.confidence || 0) * 100);
+    const dirColor = t.direction === 'BUY' ? 'var(--green)' : '#ef4444';
+    return `
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:rgba(255,255,255,0.03);margin-bottom:6px;flex-wrap:wrap;">
+        <span style="font-family:var(--mono);font-weight:700;color:var(--text);">${t.instrument}</span>
+        <span style="font-weight:700;color:${dirColor};font-size:13px;">${t.direction}</span>
+        <span style="color:var(--muted);font-size:11px;">conf <strong style="color:var(--text);">${confPct}%</strong></span>
+        <span style="color:var(--muted);font-size:11px;">SL <strong>${t.sl_pips}p</strong> TP <strong>${t.tp_pips}p</strong></span>
+        <span style="color:var(--muted);font-size:11px;">source: ${t.source || '—'}</span>
+        <span style="margin-left:auto;color:var(--muted);font-size:11px;">⏱ ${minutesLeft}min</span>
+        <span style="font-family:var(--mono);font-size:10px;color:var(--muted);">#${t.id}</span>
+        <button onclick="approveOrRejectTrade('${t.id}','approve')" style="padding:4px 14px;border-radius:6px;border:none;background:var(--green);color:#fff;font-weight:600;cursor:pointer;font-size:12px;">✅ Approuver</button>
+        <button onclick="approveOrRejectTrade('${t.id}','reject')" style="padding:4px 14px;border-radius:6px;border:none;background:#ef4444;color:#fff;font-weight:600;cursor:pointer;font-size:12px;">❌ Rejeter</button>
+      </div>`;
+  });
+  container.innerHTML = rows.join('');
 }
 
 function fmtPnl(val, currSym) {
@@ -1279,6 +1400,7 @@ function populateSettings(data) {
   document.getElementById('scalp-kill-zones').value = String(coalesce(settings.scalp_only_kill_zones, true));
   document.getElementById('scalp-max-per-hour').value = coalesce(settings.scalp_max_trades_per_hour, 4);
   document.getElementById('scalp-adx-min').value = coalesce(settings.scalp_adx_min_trend, 20);
+  document.getElementById('require-human-confirmation').value = String(coalesce(settings.require_human_confirmation, false));
   updateStrategyModeUI();
 
   // Agent pipeline status: show from heartbeat data
@@ -1351,6 +1473,7 @@ async function saveSettings(silent = false) {
     scalp_only_kill_zones: document.getElementById('scalp-kill-zones').value === 'true',
     scalp_max_trades_per_hour: parseInt(document.getElementById('scalp-max-per-hour').value || '4', 10),
     scalp_adx_min_trend: parseFloat(document.getElementById('scalp-adx-min').value || '20'),
+    require_human_confirmation: document.getElementById('require-human-confirmation').value === 'true',
   };
 
   const res = await fetch('/api/settings', {
@@ -1964,6 +2087,7 @@ async function fetchStatus() {
     }
     document.getElementById('active-symbols').textContent = symText;
     populateSettings(data);
+    renderPendingApprovals(data.pending_approvals || []);
     const allowTrade = String((data.settings && data.settings.allow_trade_execution) || false) === 'true';
     const modeNote = document.getElementById('ai-mode-note');
     if (modeNote) {
@@ -2076,6 +2200,10 @@ async function fetchStatus() {
     document.getElementById('last-update').textContent =
       new Date().toLocaleTimeString('fr-FR');
 
+    // ── XAUUSDm Live panel ──────────────────────────────────────────────
+    updateXauLivePanel(data);
+    // ────────────────────────────────────────────────────────────────────
+
     // Log
     const logs = data.session_log || [];
     const logEl = document.getElementById('log-container');
@@ -2183,6 +2311,94 @@ async function fetchStatus() {
 }
 
 // Countdown & auto-refresh
+// ── XAUUSDm Live panel update ────────────────────────────────────────────
+function updateXauLivePanel(data) {
+  const sym = '$';
+  // Prix bid/ask depuis live_snapshot ou open_positions
+  const snap = data.live_snapshot || {};
+  const xauPos = (data.open_positions || []).find(p => String(p.instrument||'').toUpperCase() === 'XAUUSDM');
+
+  // Bid/Ask
+  const bid = snap.bid || snap.close || 0;
+  const ask = snap.ask || (bid > 0 ? bid + (snap.spread_pips || 0) * 0.1 : 0);
+  document.getElementById('xau-bid').textContent = bid > 0 ? bid.toFixed(2) : '—';
+  document.getElementById('xau-ask').textContent = ask > 0 ? ask.toFixed(2) : '—';
+
+  // Spread
+  const spreadVal = snap.spread_pips || 0;
+  const spreadEl = document.getElementById('xau-spread');
+  spreadEl.textContent = spreadVal > 0 ? spreadVal.toFixed(1) + 'p' : '—';
+  spreadEl.style.color = spreadVal > 0 && spreadVal > 6 ? 'var(--red)' : 'var(--green)';
+
+  // P&L jour
+  const dpnl = parseFloat(data.daily_pnl || 0);
+  const dayPnlEl = document.getElementById('xau-day-pnl');
+  let pnlIcon = dpnl >= 5.0 ? '🏆' : dpnl <= -10.0 ? '⛔' : dpnl > 0 ? '🟢' : dpnl < 0 ? '🔴' : '⚪';
+  dayPnlEl.innerHTML = pnlIcon + ' <span style="color:' + (dpnl >= 0 ? 'var(--green)' : 'var(--red)') + ';font-weight:700;">' + (dpnl >= 0 ? '+' : '') + sym + dpnl.toFixed(2) + '</span>';
+
+  // Trades jour
+  const todayTrades = (data.recent_trades_today || 0);
+  document.getElementById('xau-day-trades').textContent = todayTrades + ' / 5';
+
+  // Badge de titre
+  const badgeEl = document.getElementById('xau-pnl-badge');
+  if (dpnl >= 5.0) {
+    badgeEl.innerHTML = '🏆 Objectif atteint ! +' + sym + dpnl.toFixed(2);
+    badgeEl.style.color = 'var(--green)';
+  } else if (dpnl <= -10.0) {
+    badgeEl.innerHTML = '⛔ Limite perte atteinte ' + sym + dpnl.toFixed(2);
+    badgeEl.style.color = 'var(--red)';
+  } else {
+    badgeEl.innerHTML = (dpnl >= 0 ? '🟢 +' : '🔴 ') + sym + dpnl.toFixed(2) + ' jour';
+    badgeEl.style.color = dpnl >= 0 ? 'var(--green)' : 'var(--red)';
+  }
+
+  // Barre de progression objectif $5
+  const goalPct = Math.min(100, Math.max(0, (dpnl / 5.0) * 100));
+  document.getElementById('xau-goal-bar').style.width = goalPct + '%';
+  document.getElementById('xau-goal-label').textContent = (dpnl >= 0 ? '+' : '') + sym + dpnl.toFixed(2) + ' / ' + sym + '5.00';
+
+  // Position ouverte XAU
+  const posWrap = document.getElementById('xau-position-wrap');
+  if (xauPos) {
+    posWrap.style.display = 'block';
+    const pnlPos = parseFloat(xauPos.unrealized_pnl || xauPos.pnl || 0);
+    document.getElementById('xau-pos-dir').innerHTML = '<span style="color:' + (xauPos.direction === 'BUY' ? 'var(--green)' : 'var(--red)') + ';">' + xauPos.direction + '</span>';
+    document.getElementById('xau-pos-entry').textContent = (xauPos.avg_price || xauPos.entry_price || 0).toFixed(2);
+    document.getElementById('xau-pos-pnl').innerHTML = '<span style="color:' + (pnlPos >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + (pnlPos >= 0 ? '+' : '') + sym + pnlPos.toFixed(2) + '</span>';
+    document.getElementById('xau-pos-sl').textContent = xauPos.sl ? xauPos.sl.toFixed(2) : '—';
+    document.getElementById('xau-pos-tp').textContent = xauPos.tp ? xauPos.tp.toFixed(2) : '—';
+    document.getElementById('xau-pos-lot').textContent = xauPos.volume || xauPos.lot || '—';
+  } else {
+    posWrap.style.display = 'none';
+  }
+
+  // Derniers signaux XAU depuis scan_results
+  const scan = data.smart_scan || {};
+  const xauCandidate = (scan.candidates || []).find(c => String(c.symbol||'').toUpperCase() === 'XAUUSDM');
+  const sigList = document.getElementById('xau-signals-list');
+  if (xauCandidate) {
+    const dir = xauCandidate.signal_direction || '—';
+    const score = xauCandidate.score || 0;
+    const src = xauCandidate.source || '—';
+    const ts = xauCandidate.scanned_at ? new Date(xauCandidate.scanned_at).toLocaleTimeString('fr-FR') : '—';
+    const regime = xauCandidate.regime || '';
+    const dirColor = dir === 'BUY' ? 'var(--green)' : dir === 'SELL' ? 'var(--red)' : 'var(--muted)';
+    const scorePips = Array.from({length: 5}, (_, i) =>
+      '<span style="display:inline-block;width:8px;height:8px;border-radius:2px;margin:0 1px;background:' + (i < score ? 'var(--amber)' : 'var(--border2)') + ';"></span>'
+    ).join('');
+    sigList.innerHTML =
+      '<span style="color:' + dirColor + ';font-weight:700;">' + dir + '</span>' +
+      ' &nbsp;Score: ' + scorePips +
+      ' &nbsp;<span style="color:var(--accent);">[' + src + ']</span>' +
+      (regime ? ' &nbsp;<span style="color:var(--muted);">' + regime + '</span>' : '') +
+      ' &nbsp;<span style="color:var(--muted2);">' + ts + '</span>';
+  } else if (scan.updated_at) {
+    sigList.textContent = 'Pas de signal XAU actif — dernier scan ' + new Date(scan.updated_at).toLocaleTimeString('fr-FR');
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────
+
 function tick() {
   countdown--;
   autoAiCountdown--;
@@ -2191,7 +2407,7 @@ function tick() {
     document.getElementById('ai-live-auto').textContent = 'ON · ' + Math.max(0, autoAiCountdown) + 's';
   }
   if (countdown <= 0) {
-    countdown = 3;
+    countdown = 5;
     fetchStatus();
   }
   if (autoAiEnabled && autoAiCountdown <= 0 && !aiBusy) {
@@ -2219,7 +2435,8 @@ function initAutoSave() {
     'scalp-mode', 'scalp-timeframe', 'scalp-ema-fast', 'scalp-ema-slow',
     'scalp-stoch-k', 'scalp-stoch-d', 'scalp-sl-atr', 'scalp-tp-atr',
     'scalp-spread-forex', 'scalp-spread-gold', 'scalp-min-score',
-    'scalp-kill-zones', 'scalp-max-per-hour', 'scalp-adx-min'
+    'scalp-kill-zones', 'scalp-max-per-hour', 'scalp-adx-min',
+    'require-human-confirmation'
   ].forEach(id => {
     const el = document.getElementById(id);
     if (el) {
@@ -2525,6 +2742,14 @@ class Handler(BaseHTTPRequestHandler):
                     # Agents status
                     "agents": agents_status,
                 }
+                # Human pending approvals
+                try:
+                    from runtime_db import RuntimeStore as _RS
+                    _store = _RS()
+                    _store.expire_old_approvals()
+                    status["pending_approvals"] = _store.get_pending_approvals()
+                except Exception:
+                    status["pending_approvals"] = []
                 if focus:
                     status["focus"] = focus
                 self._send_json(status)
@@ -2585,6 +2810,21 @@ class Handler(BaseHTTPRequestHandler):
                 tg = TelegramNotifier()
                 result = tg.test_connection()
                 self._send_json(result)
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, status=500)
+        elif self.path in ('/api/approve-trade', '/api/reject-trade'):
+            try:
+                from runtime_db import RuntimeStore
+                length = int(self.headers.get('Content-Length', '0'))
+                raw = self.rfile.read(length).decode('utf-8') if length else '{}'
+                payload = json.loads(raw)
+                trade_id = str(payload.get('id', '')).strip()
+                if not trade_id:
+                    self._send_json({"ok": False, "error": "id manquant"}, status=400)
+                    return
+                new_status = 'approved' if self.path == '/api/approve-trade' else 'rejected'
+                updated = RuntimeStore().update_approval_status(trade_id, new_status)
+                self._send_json({"ok": updated, "id": trade_id, "status": new_status})
             except Exception as e:
                 self._send_json({"ok": False, "error": str(e)}, status=500)
         else:

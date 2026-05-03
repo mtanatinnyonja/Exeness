@@ -19,7 +19,7 @@ if _env_path.exists():
 
 # === BROKER ===
 BROKER = "mt5"  # "mt5" | "demo"
-PAPER_TRADING = False  # Mettre True pour activer le paper trading
+PAPER_TRADING = False
 
 # === META TRADER 5 / EXNESS ===
 MT5_TERMINAL_PATH = ""      # Exemple: C:/Program Files/MetaTrader 5/terminal64.exe
@@ -27,16 +27,14 @@ MT5_LOGIN = None            # Laisse vide pour détecter le MT5 déjà ouvert
 MT5_PASSWORD = ""
 MT5_SERVER = ""
 REQUIRE_DEMO_ACCOUNT = True
-ALLOW_TRADE_EXECUTION = False   # Sécurité: paper mode par défaut
+ALLOW_TRADE_EXECUTION = False  # Garder False jusqu'à validation manuelle
 MT5_MAGIC_NUMBER = 20260414
 MT5_DEVIATION = 20
 
-# === SÉLECTION DES SYMBOLES ===
-# visible uniquement = seulement les symboles affichés dans MT5
-SYMBOL_SOURCE_MODE = os.getenv("SYMBOL_SOURCE_MODE", "visible").strip().lower()
-PREFERRED_SYMBOLS = [s.strip() for s in os.getenv("PREFERRED_SYMBOLS", "").split(",") if s.strip()]
-MT5_MAX_VISIBLE_SYMBOLS = int(os.getenv("MAX_SYMBOLS_PER_CYCLE", "10"))
-AUTONOMOUS_MODE = True
+# === SÉLECTION DES SYMBOLES — XAUUSDm uniquement ===
+SYMBOL_SOURCE_MODE = "fixed"
+PREFERRED_SYMBOLS = ["XAUUSDm"]
+MT5_MAX_VISIBLE_SYMBOLS = 1
 DASHBOARD_PORT = int(os.getenv("DASHBOARD_PORT", "8080"))
 
 # === IA LOCALE ===
@@ -67,40 +65,30 @@ LLM_FALLBACK_TECHNICAL = os.getenv("LLM_FALLBACK_TECHNICAL", "true").strip().low
 
 # === FILTRES DE SIGNAL ET CONTEXTE MARCHE ===
 ENABLE_SIGNAL_QUALITY_FILTER = os.getenv("ENABLE_SIGNAL_QUALITY_FILTER", "true").strip().lower() == "true"
-SIGNAL_QUALITY_MIN_SCORE = int(os.getenv("SIGNAL_QUALITY_MIN_SCORE", "2"))
+SIGNAL_QUALITY_MIN_SCORE = 3
 SIGNAL_QUALITY_MIN_BIAS = float(os.getenv("SIGNAL_QUALITY_MIN_BIAS", "0.5"))
 ENABLE_MARKET_CONTEXT = os.getenv("ENABLE_MARKET_CONTEXT", "true").strip().lower() == "true"
-MAX_TRADES_PER_DAY = int(os.getenv("MAX_TRADES_PER_DAY", "4"))
-TRADE_COOLDOWN_MINUTES = int(os.getenv("TRADE_COOLDOWN_MINUTES", "30"))
+MAX_TRADES_PER_DAY = 5
+TRADE_COOLDOWN_MINUTES = 20
 
-# === MODE TRADER HUMAIN ET PLANIFICATION ===
-ENABLE_HUMAN_LIKE_MODE = os.getenv("ENABLE_HUMAN_LIKE_MODE", "false").strip().lower() == "true"
-HUMAN_LIKE_MIN_SCORE = int(os.getenv("HUMAN_LIKE_MIN_SCORE", "3"))
-HUMAN_LIKE_MIN_BIAS = float(os.getenv("HUMAN_LIKE_MIN_BIAS", "0.5"))
-HUMAN_LIKE_MAX_RECENT_TRADES = int(os.getenv("HUMAN_LIKE_MAX_RECENT_TRADES", "2"))
-HUMAN_LIKE_TARGET_TRADES_PER_DAY = int(os.getenv("HUMAN_LIKE_TARGET_TRADES_PER_DAY", "2"))
-HUMAN_LIKE_MIN_TRADES_PER_DAY = int(os.getenv("HUMAN_LIKE_MIN_TRADES_PER_DAY", "1"))
-ENABLE_AGENT_COMMUNICATION_MODE = os.getenv("ENABLE_AGENT_COMMUNICATION_MODE", "false").strip().lower() == "true"
+# === CAPITAL & RISK — Demo $100 XAU ===
+INITIAL_CAPITAL = 100.0
+MAX_RISK_PER_TRADE = 0.015  # 1.5% par trade
+DAILY_TARGET = 5.0          # Objectif $5/jour
+DAILY_LOSS_LIMIT = -10.0    # Stop si -$10 (10% du capital)
+MAX_OPEN_POSITIONS = 1      # 1 seule position XAU à la fois
+POSITION_SIZE_USD = 0.5
 
-# === CAPITAL & RISK ===
-INITIAL_CAPITAL = 50.0
-MAX_RISK_PER_TRADE = 0.02
-DAILY_TARGET = float(os.getenv("DAILY_TARGET", "2.0"))
-DAILY_LOSS_LIMIT = float(os.getenv("DAILY_LOSS_LIMIT", "-5.0"))
-MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "3"))
-POSITION_SIZE_USD = 1.0
+# === INSTRUMENTS — XAUUSDm uniquement ===
+INSTRUMENTS = ["XAUUSDm"]
 
-# === INSTRUMENTS ===
-# Vide = dynamique, prend tous les symboles visibles dans MT5 Market Watch
-INSTRUMENTS = []
-
-# === TIMEFRAMES ===
-PRIMARY_TIMEFRAME = "M15"
-CONFIRM_TIMEFRAME = "M5"
+# === TIMEFRAMES — Optimaux XAU hybride ===
+PRIMARY_TIMEFRAME = "H1"
+CONFIRM_TIMEFRAME = "M15"
 
 # === SIGNAL FILTER ===
-MIN_SIGNAL_SCORE = 2
-SIGNAL_COOLDOWN_MINUTES = 10
+MIN_SIGNAL_SCORE = 3
+SIGNAL_COOLDOWN_MINUTES = 5
 
 # === INDICATEURS TECHNIQUES ===
 RSI_PERIOD = 14
@@ -118,10 +106,9 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
 # === SÉLECTION DYNAMIQUE DES PAIRES ===
-# smart = scan toutes les paires visibles, filtre par spread + qualité, prend les meilleures
-SYMBOL_SELECTION_MODE = os.getenv("SYMBOL_SELECTION_MODE", "smart").strip().lower()
+SYMBOL_SELECTION_MODE = "fixed"
 MAX_SPREAD_FILTER_FOREX = float(os.getenv("MAX_SPREAD_FILTER_FOREX", "2.5"))
-MAX_SPREAD_FILTER_GOLD = float(os.getenv("MAX_SPREAD_FILTER_GOLD", "35.0"))
+MAX_SPREAD_FILTER_GOLD = 8.0   # Exness XAU spread normal ~3 pips
 MAX_SPREAD_FILTER_CRYPTO = float(os.getenv("MAX_SPREAD_FILTER_CRYPTO", "80.0"))
 
 # === MÉMOIRE & BASE LOCALE ===
@@ -130,14 +117,17 @@ TRADES_FILE = "data/trades_history.json"
 RUNTIME_DB_FILE = "data/local_runtime.db"
 LOGS_DIR = "logs/"
 
-# === SCHEDULER ===
+# === SCHEDULER — Sessions XAU (UTC) ===
 CHECK_INTERVAL_MINUTES = 5
-MARKET_OPEN_HOUR = 1
-MARKET_CLOSE_HOUR = 23
-TRADE_DAYS = [0, 1, 2, 3, 4]
+MARKET_OPEN_HOUR = 7    # London open
+MARKET_CLOSE_HOUR = 21  # NY close
+TRADE_DAYS = [0, 1, 2, 3, 4]  # Lundi-Vendredi
 
 # Mode de moteur de signaux : classic | scalping | hybrid
 STRATEGY_MODE = os.getenv("STRATEGY_MODE", "hybrid").strip().lower()
+
+# Confirmation humaine obligatoire avant tout ordre réel (sécurité)
+REQUIRE_HUMAN_CONFIRMATION = os.getenv("REQUIRE_HUMAN_CONFIRMATION", "false").strip().lower() in ("1", "true", "yes", "on")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SCALPING — paramètres du module scalping_strategy.py
@@ -158,28 +148,28 @@ SCALP_STOCH_SMOOTH = int(os.getenv("SCALP_STOCH_SMOOTH", "3"))
 
 # ATR pour le calcul SL/TP
 SCALP_ATR_PERIOD    = int(os.getenv("SCALP_ATR_PERIOD", "7"))
-SCALP_SL_ATR_MULT   = float(os.getenv("SCALP_SL_ATR_MULT", "1.0"))   # SL = 1x ATR
-SCALP_TP_ATR_MULT   = float(os.getenv("SCALP_TP_ATR_MULT", "1.8"))   # TP = 1.8x ATR (RR ~1:1.8)
+SCALP_SL_ATR_MULT   = 1.5   # SL large pour absorber la volatilité XAU
+SCALP_TP_ATR_MULT   = 3.0   # TP ambitieux (XAU fait 50-200 pips par move)
 
 # Filtre spread — valeurs en pips
 SCALP_MAX_SPREAD_FOREX  = float(os.getenv("SCALP_MAX_SPREAD_FOREX",  "1.5"))
-SCALP_MAX_SPREAD_GOLD   = float(os.getenv("SCALP_MAX_SPREAD_GOLD",   "25.0"))
+SCALP_MAX_SPREAD_GOLD   = 6.0   # Spread max XAU scalping
 SCALP_MAX_SPREAD_CRYPTO = float(os.getenv("SCALP_MAX_SPREAD_CRYPTO", "60.0"))
 
 # Filtre volume (ratio vs moyenne 10 bougies)
 SCALP_MIN_VOLUME_RATIO = float(os.getenv("SCALP_MIN_VOLUME_RATIO", "1.1"))
 
 # Score minimum pour valider un signal scalping (0-6)
-SCALP_MIN_SCORE = int(os.getenv("SCALP_MIN_SCORE", "3"))
+SCALP_MIN_SCORE = 4  # Score 4+ requis pour XAU (qualité > quantité)
 
-# ADX minimum en mode MOMENTUM (tendance assez forte)
-SCALP_ADX_MIN_TREND = float(os.getenv("SCALP_ADX_MIN_TREND", "20.0"))
+# ADX minimum en mode MOMENTUM — tendance forte requise pour XAU
+SCALP_ADX_MIN_TREND = 25.0
 
-# Forcer les Kill Zones uniquement (recommandé)
-SCALP_ONLY_KILL_ZONES = os.getenv("SCALP_ONLY_KILL_ZONES", "true").strip().lower() == "true"
+# Forcer les Kill Zones uniquement (London + NY)
+SCALP_ONLY_KILL_ZONES = True
 
 # Nombre max de trades scalping par heure (par instrument)
-SCALP_MAX_TRADES_PER_HOUR = int(os.getenv("SCALP_MAX_TRADES_PER_HOUR", "4"))
+SCALP_MAX_TRADES_PER_HOUR = 2
 
 # Timeframe MT5 pour le scalping ("M1" ou "M5")
 SCALP_TIMEFRAME = os.getenv("SCALP_TIMEFRAME", "M5").strip().upper()

@@ -13,7 +13,7 @@ from circuit_breaker import CircuitBreaker
 from audit_logger import get_audit_logger
 from telegram_notifier import TelegramNotifier
 from signal_engine import calculate_atr
-from settings import MAX_RISK_PER_TRADE, MAX_OPEN_POSITIONS
+from settings import MAX_RISK_PER_TRADE, MAX_OPEN_POSITIONS, REQUIRE_HUMAN_CONFIRMATION, MAX_TRADES_PER_DAY
 
 
 class ExecutionAgent(Agent):
@@ -34,8 +34,11 @@ class ExecutionAgent(Agent):
         self.startup_warmup_seconds = 120
         self.min_confidence = 0.55
         self.required_confirmations = 2
-        self.confirmation_window_seconds = 90
+        # Le décideur impose déjà 120s de cooldown par instrument.
+        # La fenêtre de confirmation doit donc rester au-dessus de ce délai.
+        self.confirmation_window_seconds = 180
         self._signal_confirmations = {}
+        self._require_human = REQUIRE_HUMAN_CONFIRMATION
     
     async def on_startup(self):
         """Initialisation."""
@@ -64,6 +67,8 @@ class ExecutionAgent(Agent):
             
             # Surveiller les positions existantes
             await self._check_positions()
+            # Exécuter les trades approuvés manuellement
+            await self._execute_approved_trades()
             self.write_heartbeat()
             await asyncio.sleep(1)
     
@@ -103,6 +108,32 @@ class ExecutionAgent(Agent):
             return
         # Reset after passing gate so the next entry must reconfirm.
         self._signal_confirmations[key] = []
+        self.log("INFO", f"{instrument}: Confirmation {self.required_confirmations}/{self.required_confirmations} ✅ — passage exécution ({direction} conf={confidence:.0%})")
+
+        # Human confirmation gate: si activé, mettre le trade en attente d'approbation.
+        try:
+            from runtime_db import RuntimeStore
+            rt_settings = RuntimeStore().get_settings()
+            require_human = rt_settings.get("require_human_confirmation", self._require_human)
+        except Exception:
+            require_human = self._require_human
+
+        if require_human:
+            try:
+                from runtime_db import RuntimeStore
+                store = RuntimeStore()
+                store.expire_old_approvals()
+                trade_id = store.add_pending_approval(decision, ttl_minutes=15)
+                self.log("INFO", f"{instrument}: Trade en attente d'approbation humaine (id={trade_id}) | {direction} conf={confidence:.0%}")
+                await self.telegram.send_message_async(
+                    f"⏳ *Trade en attente — {instrument}*\n"
+                    f"Direction: *{direction}*  |  Confiance: {confidence:.0%}\n"
+                    f"SL: {decision.get('sl_pips','?')}p  TP: {decision.get('tp_pips','?')}p\n"
+                    f"Approuve depuis le Dashboard → id `{trade_id}`"
+                ) if hasattr(self.telegram, "send_message_async") else None
+            except Exception as e:
+                self.log("WARN", f"Impossible d'enregistrer l'approbation: {e}")
+            return
 
         if self.execution_block_until and datetime.now(timezone.utc) < self.execution_block_until:
             if not self._last_block_log_ts or (datetime.now(timezone.utc) - self._last_block_log_ts).total_seconds() >= 30:
@@ -112,6 +143,21 @@ class ExecutionAgent(Agent):
             return
         
         try:
+            # Limite journalière de trades
+            trades_today = self.memory.get_trades_started_today()
+            if trades_today >= MAX_TRADES_PER_DAY:
+                self.log("INFO", f"{instrument}: Limite journalière atteinte ({trades_today}/{MAX_TRADES_PER_DAY} trades) — pause jusqu'à demain")
+                return
+
+            # Garde objectif / limite perte journalière
+            daily_pnl = self._get_daily_pnl()
+            if daily_pnl >= 5.0:
+                self.log("INFO", f"✅ Objectif journalier atteint (${daily_pnl:.2f}) — stop trading aujourd'hui")
+                return
+            if daily_pnl <= -10.0:
+                self.log("WARN", f"🛑 Limite perte journalière atteinte (${daily_pnl:.2f}) — stop trading")
+                return
+
             # Vérifier les limites
             open_positions = self.broker.get_open_positions()
             # Hard guard: single-position mode to prevent stacking entries.
@@ -134,14 +180,20 @@ class ExecutionAgent(Agent):
             
             # Récupérer l'account
             account = self.broker.get_account_summary()
-            balance = account.get("balance", 1000)
-            
-            # Calcul du risque et volume
-            sl_pips = decision.get("sl_pips", 30)
+            balance = float(account.get("balance", 100.0) or 100.0)
+
+            # Calcul lot size adapté $100 XAU demo
+            # XAUUSDm : 1 lot = $1 par pip / 0.01 lot = $0.01 par pip
+            # Risque 1.5% de $100 = $1.50 par trade
+            sl_pips = decision.get("sl_pips", 20)
             tp_pips = decision.get("tp_pips", 60)
-            risk_usd = balance * MAX_RISK_PER_TRADE
-            
-            volume = self.broker.calculate_volume(instrument, risk_usd, sl_pips)
+            risk_usd = balance * MAX_RISK_PER_TRADE  # 1.5% du solde réel
+            pip_value_per_lot = 1.0  # XAU standard account
+            lot = risk_usd / max(float(sl_pips) * pip_value_per_lot, 0.01)
+            lot = max(0.01, min(0.50, round(lot / 0.01) * 0.01))
+            volume = lot
+
+            self.log("INFO", f"📊 XAU {direction} | lot={lot} | SL={sl_pips}p | TP={tp_pips}p | risque=${risk_usd:.2f}")
             
             # Placer l'ordre
             order = self.broker.place_market_order(
@@ -153,6 +205,10 @@ class ExecutionAgent(Agent):
                 comment=f"AUTO|{direction}"
             )
             
+            if not order:
+                self.log("WARN", f"{instrument}: Ordre refusé par le broker (None) — vérifie allow_trade_execution et la connexion MT5")
+                return
+
             if order:
                 # Enregistrer
                 trade_id = self.memory.add_trade({
@@ -221,6 +277,37 @@ class ExecutionAgent(Agent):
                 return
             self.log("ERROR", f"{instrument}: {err[:100]}")
     
+    def _get_daily_pnl(self) -> float:
+        """Calcule le P&L réalisé de la journée courante depuis trades_history.json."""
+        try:
+            from pathlib import Path
+            import json as _json
+            trades_file = Path("data/trades_history.json")
+            if not trades_file.exists():
+                return 0.0
+            trades = _json.loads(trades_file.read_text(encoding="utf-8"))
+            if not isinstance(trades, list):
+                return 0.0
+            today = datetime.now(timezone.utc).date()
+            day_pnl = 0.0
+            for t in trades:
+                if str(t.get("status", "")).lower() != "closed":
+                    continue
+                closed_str = t.get("closed_at") or t.get("timestamp", "")
+                if not closed_str:
+                    continue
+                try:
+                    closed_dt = datetime.fromisoformat(str(closed_str).replace("Z", "+00:00"))
+                    if closed_dt.tzinfo is None:
+                        closed_dt = closed_dt.replace(tzinfo=timezone.utc)
+                    if closed_dt.astimezone(timezone.utc).date() == today:
+                        day_pnl += float(t.get("pnl", 0.0) or 0.0)
+                except Exception:
+                    continue
+            return round(day_pnl, 2)
+        except Exception:
+            return 0.0
+
     async def _check_positions(self):
         """Vérifie les positions ouvertes."""
         try:
@@ -307,4 +394,82 @@ class ExecutionAgent(Agent):
         except Exception as e:
             self.log("ERROR", f"{instrument}: Impossible fermer: {str(e)[:100]}")
 
+    async def _execute_approved_trades(self):
+        """Vérifie les approbations humaines et exécute les trades approuvés."""
+        try:
+            from runtime_db import RuntimeStore
+            store = RuntimeStore()
+            store.expire_old_approvals()
+            approved = [t for t in store.get_pending_approvals() if t["status"] == "pending"]
+            # get_pending_approvals ne retourne que status=pending, on vérifie si approuvé
+            # en récupérant toutes les entrées approuvées non encore exécutées
+            with store._connect() as conn:
+                rows = conn.execute(
+                    "SELECT id, payload FROM pending_approvals WHERE status = 'approved'"
+                ).fetchall()
+            for trade_id, raw_payload in rows:
+                try:
+                    import json as _json
+                    payload = _json.loads(raw_payload) if raw_payload else {}
+                    self.log("INFO", f"Exécution du trade approuvé id={trade_id} ({payload.get('instrument','?')} {payload.get('direction','?')})")
+                    store.update_approval_status(trade_id, "executed")
+                    await self._place_order(payload)
+                except Exception as e:
+                    self.log("WARN", f"Impossible d'exécuter l'approbation {trade_id}: {e}")
+        except Exception:
+            pass
+
+    async def _place_order(self, decision: Dict[str, Any]):
+        """Effectue l'ordre MT5 à partir d'un payload de décision."""
+        instrument = decision.get("instrument", "?")
+        direction = decision.get("direction", "?")
+        try:
+            open_positions = self.broker.get_open_positions()
+            if len(open_positions) >= 1:
+                self.log("INFO", f"{instrument}: Ordre ignoré (position déjà ouverte)")
+                return
+            account = self.broker.get_account_summary()
+            balance = float(account.get("balance", 100.0) or 100.0)
+            sl_pips = decision.get("sl_pips", 20)
+            tp_pips = decision.get("tp_pips", 60)
+            risk_usd = balance * MAX_RISK_PER_TRADE
+            pip_value_per_lot = 1.0  # XAU standard account
+            lot = risk_usd / max(float(sl_pips) * pip_value_per_lot, 0.01)
+            volume = max(0.01, min(0.50, round(lot / 0.01) * 0.01))
+            order = self.broker.place_market_order(
+                instrument=instrument,
+                direction=direction,
+                volume=volume,
+                stop_loss_pips=sl_pips,
+                take_profit_pips=tp_pips,
+                comment=f"HUMAN|{direction}"
+            )
+            if order:
+                trade_id = self.memory.add_trade({
+                    "instrument": instrument,
+                    "direction": direction,
+                    "volume": volume,
+                    "entry_price": order.get("entry_price", 0),
+                    "stop_loss": order.get("stop_loss", 0),
+                    "take_profit": order.get("take_profit", 0),
+                    "broker_id": order.get("broker_id"),
+                    "sl_pips": sl_pips,
+                    "tp_pips": tp_pips,
+                    "risk_usd": risk_usd,
+                    "status": "open"
+                })
+                self.audit.log_execution(
+                    instrument, direction, volume,
+                    order.get("entry_price", 0), order.get("stop_loss", 0),
+                    order.get("take_profit", 0), order.get("broker_id", "")
+                )
+                self.log("INFO", f"{instrument}: {direction} exécuté (approuvé) | vol={volume} | SL={sl_pips}p TP={tp_pips}p")
+                self.executed_trades += 1
+                self.telegram.send_trade_alert(trade_data={
+                    "instrument": instrument, "direction": direction,
+                    "volume": volume, "entry": order.get("entry_price", 0),
+                    "sl_pips": sl_pips, "tp_pips": tp_pips,
+                })
+        except Exception as e:
+            self.log("ERROR", f"{instrument}: Impossible d'exécuter le trade approuvé: {str(e)[:100]}")
 
