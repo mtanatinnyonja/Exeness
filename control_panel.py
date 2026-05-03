@@ -699,12 +699,19 @@ HTML_PAGE = r"""<!DOCTYPE html>
       <div class="form-grid">
         <div class="field">
           <label>Moteur de signaux</label>
-          <select id="strategy-mode" onchange="scheduleAutoSave()">
+          <select id="strategy-mode" onchange="updateStrategyModeUI(); scheduleAutoSave()">
             <option value="classic">classic (ancien système)</option>
             <option value="scalping">scalping uniquement</option>
             <option value="hybrid">hybrid (classique + scalping)</option>
           </select>
         </div>
+        <div class="field" style="grid-column:1/-1;">
+          <label>Résumé du mode</label>
+          <div id="strategy-mode-note" style="padding:10px 12px;border-radius:8px;background:rgba(255,255,255,0.04);border:1px solid var(--border);color:var(--muted);font-size:12px;line-height:1.5;">
+            `classic` = ancien moteur en M15 avec confirmation M5. `scalping` = moteur court terme M1/M5. `hybrid` = combine les deux.
+          </div>
+        </div>
+        <div id="scalp-settings-fields" style="display:contents;">
         <div class="field">
           <label>Mode scalping</label>
           <select id="scalp-mode" onchange="scheduleAutoSave()">
@@ -769,6 +776,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
         <div class="field">
           <label>ADX min tendance</label>
           <input id="scalp-adx-min" type="number" min="10" max="40" step="1" oninput="scheduleAutoSave()" />
+        </div>
         </div>
       </div>
       <div style="margin-top:10px;color:var(--muted);font-family:var(--mono);font-size:11px;">
@@ -1055,6 +1063,29 @@ function coalesce() {
   return null;
 }
 
+function updateStrategyModeUI() {
+  const strategyEl = document.getElementById('strategy-mode');
+  const noteEl = document.getElementById('strategy-mode-note');
+  const scalpFieldsEl = document.getElementById('scalp-settings-fields');
+  if (!strategyEl || !noteEl || !scalpFieldsEl) return;
+
+  const mode = strategyEl.value || 'hybrid';
+  if (mode === 'classic') {
+    noteEl.innerHTML = '<strong style="color:var(--text);">classic</strong> : ancien moteur technique. Analyse principale en <strong>M15</strong> avec confirmation <strong>M5</strong>. Les réglages scalping M1/M5 ci-dessous ne s\'appliquent pas.';
+    scalpFieldsEl.style.display = 'none';
+    return;
+  }
+
+  if (mode === 'scalping') {
+    noteEl.innerHTML = '<strong style="color:var(--text);">scalping</strong> : moteur court terme. Les paramètres M1/M5, EMA, Stoch, ATR et spread ci-dessous pilotent directement les entrées.';
+    scalpFieldsEl.style.display = 'contents';
+    return;
+  }
+
+  noteEl.innerHTML = '<strong style="color:var(--text);">hybrid</strong> : ancien moteur + scalping. Le classique travaille en <strong>M15/M5</strong> et les réglages ci-dessous ne concernent que la partie scalping.';
+  scalpFieldsEl.style.display = 'contents';
+}
+
 function fmtPnl(val, currSym) {
   const sym = currSym || window._displayCurrency || '$';
   const v = parseFloat(val) || 0;
@@ -1248,6 +1279,7 @@ function populateSettings(data) {
   document.getElementById('scalp-kill-zones').value = String(coalesce(settings.scalp_only_kill_zones, true));
   document.getElementById('scalp-max-per-hour').value = coalesce(settings.scalp_max_trades_per_hour, 4);
   document.getElementById('scalp-adx-min').value = coalesce(settings.scalp_adx_min_trend, 20);
+  updateStrategyModeUI();
 
   // Agent pipeline status: show from heartbeat data
   const agentData = data.agents || [];
