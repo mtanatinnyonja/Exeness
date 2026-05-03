@@ -15,7 +15,8 @@ from signal_engine import calculate_signal_score, calculate_mtf_signal
 from smart_strategies import build_strategies_context, get_session_score
 from market_context import analyze_market_context
 from learning_store import AgentMemory
-from settings import PRIMARY_TIMEFRAME, CONFIRM_TIMEFRAME, INSTRUMENTS
+from scalping_strategy import calculate_scalp_signal
+from settings import PRIMARY_TIMEFRAME, CONFIRM_TIMEFRAME, INSTRUMENTS, STRATEGY_MODE, SCALP_TIMEFRAME
 from runtime_db import RuntimeStore
 
 _DATA_DIR = Path("data")
@@ -36,9 +37,15 @@ class AnalystAgent(Agent):
         self.last_analysis = {}  # instrument -> timestamp dernière analyse
         self.min_broadcast_score = 3
 
+    def _get_runtime_settings(self) -> Dict[str, Any]:
+        try:
+            return self.store.get_settings()
+        except Exception:
+            return {}
+
     def _get_instruments(self) -> List[str]:
         """Lit les paires depuis les paramètres du dashboard (preferred_symbols)."""
-        settings = self.store.get_settings()
+        settings = self._get_runtime_settings()
         pref_raw = settings.get("preferred_symbols", "")
         if pref_raw:
             raw_str = str(pref_raw).strip().strip("[]").replace("'", "").replace('"', "")
@@ -46,6 +53,81 @@ class AnalystAgent(Agent):
             if pairs:
                 return pairs
         return self._instruments_override or INSTRUMENTS or ["EURUSDm", "XAUUSDm", "BTCUSDm"]
+
+    def _classic_candidate(self, signal: Dict[str, Any], signal_confirm: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        direction = signal.get("direction")
+        score = int(signal.get("score", 0) or 0)
+        if direction not in ("BUY", "SELL") or score < self.min_broadcast_score:
+            return None
+
+        confirm_ok = True
+        if signal_confirm and isinstance(signal_confirm, dict):
+            confirm_dir = signal_confirm.get("direction")
+            confirm_score = int(signal_confirm.get("score", 0) or 0)
+            confirm_ok = confirm_dir == direction and confirm_score >= max(2, score - 1)
+
+        if not confirm_ok:
+            return None
+
+        return {
+            "source": "classic",
+            "direction": direction,
+            "score": min(score, 5),
+            "details": signal.get("details", {}) or {},
+            "signal_confirm": signal_confirm,
+        }
+
+    def _scalp_candidate(self, scalp_signal: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        direction = scalp_signal.get("signal")
+        raw_score = int(scalp_signal.get("score", 0) or 0)
+        if direction not in ("BUY", "SELL") or raw_score <= 0:
+            return None
+
+        sl_pips = float(scalp_signal.get("sl_pips", 0.0) or 0.0)
+        tp_pips = float(scalp_signal.get("tp_pips", 0.0) or 0.0)
+        rr = round(tp_pips / sl_pips, 2) if sl_pips > 0 else 0.0
+        quality_score = round(min(1.0, max(0.35, raw_score / 6.0)), 2)
+        details = dict(scalp_signal.get("details", {}) or {})
+        details.update({
+            "atr_pips": float(scalp_signal.get("atr_pips", 0.0) or 0.0),
+            "quality_score": quality_score,
+            "signal_source": "scalping",
+            "scalp_mode": scalp_signal.get("mode", "momentum"),
+            "scalp_reasons": scalp_signal.get("reasons", []),
+            "distance_to_support_pips": sl_pips if direction == "BUY" else tp_pips,
+            "distance_to_resistance_pips": tp_pips if direction == "BUY" else sl_pips,
+            "rr_buy": rr if direction == "BUY" else 0.0,
+            "rr_sell": rr if direction == "SELL" else 0.0,
+        })
+        return {
+            "source": "scalping",
+            "direction": direction,
+            "score": min(raw_score, 5),
+            "details": details,
+            "signal_confirm": None,
+        }
+
+    def _select_candidate(self, strategy_mode: str, classic: Optional[Dict[str, Any]], scalp: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        mode = str(strategy_mode or STRATEGY_MODE).strip().lower()
+        if mode == "classic":
+            return classic
+        if mode == "scalping":
+            return scalp
+
+        if classic and scalp:
+            if classic["direction"] != scalp["direction"]:
+                return None
+            merged_details = dict(classic.get("details", {}) or {})
+            merged_details.update(scalp.get("details", {}) or {})
+            merged_details["signal_source"] = "hybrid"
+            return {
+                "source": "hybrid",
+                "direction": classic["direction"],
+                "score": min(max(int(classic["score"]), int(scalp["score"])) + 1, 5),
+                "details": merged_details,
+                "signal_confirm": classic.get("signal_confirm"),
+            }
+        return classic or scalp
     
     async def on_startup(self):
         """Initialisation."""
@@ -58,6 +140,7 @@ class AnalystAgent(Agent):
         _DATA_DIR.mkdir(exist_ok=True)
         while self.running:
             self.cycle_count += 1
+            runtime_settings = self._get_runtime_settings()
             instruments = self._get_instruments()  # relit les settings à chaque cycle
             candidates = []
             rejected = []
@@ -65,7 +148,7 @@ class AnalystAgent(Agent):
 
             # Analyser chaque instrument en rotation
             for instrument in instruments:
-                result = await self._analyze_instrument(instrument)
+                result = await self._analyze_instrument(instrument, runtime_settings)
                 if result:
                     if result.get("signal_direction") in ("BUY", "SELL"):
                         candidates.append(result)
@@ -99,9 +182,12 @@ class AnalystAgent(Agent):
             # Attendre 30s avant prochain cycle
             await asyncio.sleep(30)
     
-    async def _analyze_instrument(self, instrument: str) -> Optional[Dict]:
+    async def _analyze_instrument(self, instrument: str, runtime_settings: Optional[Dict[str, Any]] = None) -> Optional[Dict]:
         """Analyse un instrument et envoie un signal. Retourne le résultat."""
         try:
+            settings = runtime_settings or {}
+            strategy_mode = str(settings.get("strategy_mode", STRATEGY_MODE)).strip().lower()
+
             # Récupérer les données
             candles_h1 = self.broker.get_candles(instrument, PRIMARY_TIMEFRAME, 100)
             if len(candles_h1) < 20:
@@ -114,6 +200,18 @@ class AnalystAgent(Agent):
                 self.log("WARN", f"{instrument}: D1 indisponible, fallback H1 ({str(e)[:80]})")
             
             candles_m15 = self.broker.get_candles(instrument, CONFIRM_TIMEFRAME, 60)
+            spread = self.broker.get_spread_pips(instrument)
+
+            scalp_signal = None
+            if strategy_mode in {"scalping", "hybrid"}:
+                scalp_timeframe = str(settings.get("scalp_timeframe", SCALP_TIMEFRAME)).strip().upper() or SCALP_TIMEFRAME
+                candles_scalp = self.broker.get_candles(instrument, scalp_timeframe, 100)
+                scalp_signal = calculate_scalp_signal(
+                    candles_scalp,
+                    instrument=instrument,
+                    spread_pips=spread,
+                    config=settings,
+                )
             
             # Calcul du signal
             signal = calculate_mtf_signal(candles_h1, candles_d1, instrument)
@@ -133,47 +231,45 @@ class AnalystAgent(Agent):
                 open_positions=[]
             )
 
-            spread = self.broker.get_spread_pips(instrument)
+            classic_candidate = self._classic_candidate(signal, signal_confirm)
+            scalp_candidate = self._scalp_candidate(scalp_signal or {})
+            selected = self._select_candidate(strategy_mode, classic_candidate, scalp_candidate)
+
             result = {
                 "symbol": instrument,
-                "signal_direction": signal.get("direction", "WAIT"),
-                "score": signal.get("score", 0),
+                "signal_direction": selected["direction"] if selected else "WAIT",
+                "score": selected["score"] if selected else 0,
                 "spread": spread,
                 "regime": signal.get("details", {}).get("market_regime", ""),
                 "session": session.get("label", "") if isinstance(session, dict) else str(session),
+                "source": selected["source"] if selected else strategy_mode,
                 "scanned_at": datetime.now(timezone.utc).isoformat(),
             }
 
-            # Envoyer le signal seulement s'il est directionnel et suffisamment robuste.
-            direction = signal.get("direction")
-            score = int(signal.get("score", 0) or 0)
-            confirm_ok = True
-            if signal_confirm and isinstance(signal_confirm, dict):
-                confirm_dir = signal_confirm.get("direction")
-                confirm_score = int(signal_confirm.get("score", 0) or 0)
-                confirm_ok = confirm_dir == direction and confirm_score >= max(2, score - 1)
-
-            if direction in ("BUY", "SELL") and score >= self.min_broadcast_score and confirm_ok:
+            if selected and selected.get("direction") in ("BUY", "SELL"):
                 await self.send_message(
                     recipient="*",  # Broadcast
                     event_type="signal",
                     payload={
                         "signal_id": f"{instrument}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}",
                         "instrument": instrument,
-                        "direction": direction,
-                        "score": score,
-                        "details": signal.get("details", {}),
+                        "direction": selected["direction"],
+                        "score": int(selected["score"]),
+                        "details": selected.get("details", {}),
                         "market_context": market_context,
                         "session": session,
                         "strategies": strategies,
-                        "signal_confirm": signal_confirm,
+                        "signal_confirm": selected.get("signal_confirm"),
+                        "signal_source": selected.get("source", strategy_mode),
                         "spread": spread,
                     }
                 )
-                self.log("INFO", f"{instrument}: Signal {direction} validé (force {score}/5)")
-            elif direction in ("BUY", "SELL"):
-                reason = "score trop faible" if score < self.min_broadcast_score else "confirmation M15 absente"
-                self.log("DEBUG", f"{instrument}: Signal filtré ({reason})")
+                self.log("INFO", f"{instrument}: Signal {selected['direction']} validé via {selected['source']} (force {selected['score']}/5)")
+            elif classic_candidate and scalp_candidate and classic_candidate["direction"] != scalp_candidate["direction"]:
+                result["reason"] = "classic_scalp_conflict"
+                self.log("DEBUG", f"{instrument}: Conflit classic/scalping, signal ignoré")
+            elif signal.get("direction") in ("BUY", "SELL"):
+                self.log("DEBUG", f"{instrument}: Signal filtré ({strategy_mode})")
 
             self.last_analysis[instrument] = time.time()
             return result

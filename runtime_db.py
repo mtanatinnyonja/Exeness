@@ -18,6 +18,13 @@ from settings import (
     LLM_ANALYSIS_NOTES, LLM_MAX_CONTEXT_BARS,
     DAILY_TARGET, DAILY_LOSS_LIMIT, MAX_OPEN_POSITIONS,
     TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, SYMBOL_SELECTION_MODE,
+    STRATEGY_MODE,
+    SCALP_MODE, SCALP_TIMEFRAME, SCALP_EMA_FAST, SCALP_EMA_SLOW,
+    SCALP_STOCH_K, SCALP_STOCH_D, SCALP_STOCH_SMOOTH,
+    SCALP_ATR_PERIOD, SCALP_SL_ATR_MULT, SCALP_TP_ATR_MULT,
+    SCALP_MAX_SPREAD_FOREX, SCALP_MAX_SPREAD_GOLD, SCALP_MAX_SPREAD_CRYPTO,
+    SCALP_MIN_VOLUME_RATIO, SCALP_MIN_SCORE, SCALP_ADX_MIN_TREND,
+    SCALP_ONLY_KILL_ZONES, SCALP_MAX_TRADES_PER_HOUR,
 )
 
 
@@ -85,6 +92,25 @@ class RuntimeStore:
             "telegram_bot_token": TELEGRAM_BOT_TOKEN,
             "telegram_chat_id": TELEGRAM_CHAT_ID,
             "symbol_selection_mode": SYMBOL_SELECTION_MODE,
+            "strategy_mode": str(STRATEGY_MODE),
+            "scalp_mode": str(SCALP_MODE),
+            "scalp_timeframe": str(SCALP_TIMEFRAME),
+            "scalp_ema_fast": int(SCALP_EMA_FAST),
+            "scalp_ema_slow": int(SCALP_EMA_SLOW),
+            "scalp_stoch_k": int(SCALP_STOCH_K),
+            "scalp_stoch_d": int(SCALP_STOCH_D),
+            "scalp_stoch_smooth": int(SCALP_STOCH_SMOOTH),
+            "scalp_atr_period": int(SCALP_ATR_PERIOD),
+            "scalp_sl_atr_mult": float(SCALP_SL_ATR_MULT),
+            "scalp_tp_atr_mult": float(SCALP_TP_ATR_MULT),
+            "scalp_max_spread_forex": float(SCALP_MAX_SPREAD_FOREX),
+            "scalp_max_spread_gold": float(SCALP_MAX_SPREAD_GOLD),
+            "scalp_max_spread_crypto": float(SCALP_MAX_SPREAD_CRYPTO),
+            "scalp_min_volume_ratio": float(SCALP_MIN_VOLUME_RATIO),
+            "scalp_min_score": int(SCALP_MIN_SCORE),
+            "scalp_adx_min_trend": float(SCALP_ADX_MIN_TREND),
+            "scalp_only_kill_zones": bool(SCALP_ONLY_KILL_ZONES),
+            "scalp_max_trades_per_hour": int(SCALP_MAX_TRADES_PER_HOUR),
         }
 
     def _clean_symbol(self, raw: Any) -> str:
@@ -100,19 +126,19 @@ class RuntimeStore:
         return aliases.get(value, original)
 
     def _normalize(self, key: str, value: Any) -> Any:
-        if key in {"allow_trade_execution", "telegram_enabled"}:
+        if key in {"allow_trade_execution", "telegram_enabled", "scalp_only_kill_zones"}:
             if isinstance(value, str):
                 return value.strip().lower() in {"1", "true", "yes", "on"}
             return bool(value)
-        if key in {"max_symbols_per_cycle", "check_interval_minutes", "max_llm_calls_per_day", "daily_token_budget", "dashboard_port", "llm_context_bars", "max_open_positions", "local_llm_timeout"}:
+        if key in {"max_symbols_per_cycle", "check_interval_minutes", "max_llm_calls_per_day", "daily_token_budget", "dashboard_port", "llm_context_bars", "max_open_positions", "local_llm_timeout", "scalp_ema_fast", "scalp_ema_slow", "scalp_stoch_k", "scalp_stoch_d", "scalp_stoch_smooth", "scalp_atr_period", "scalp_min_score", "scalp_max_trades_per_hour"}:
             return int(value)
-        if key in {"max_risk_per_trade", "llm_temperature", "llm_min_confidence", "daily_target", "daily_loss_limit"}:
+        if key in {"max_risk_per_trade", "llm_temperature", "llm_min_confidence", "daily_target", "daily_loss_limit", "scalp_sl_atr_mult", "scalp_tp_atr_mult", "scalp_max_spread_forex", "scalp_max_spread_gold", "scalp_max_spread_crypto", "scalp_min_volume_ratio", "scalp_adx_min_trend"}:
             return float(value)
         if key in {"preferred_symbols"}:
             if isinstance(value, str):
                 return [self._clean_symbol(s) for s in value.split(",") if str(s).strip()]
             return [self._clean_symbol(s) for s in list(value)]
-        if key in {"ai_provider_requested", "symbol_source_mode", "local_llm_endpoint", "local_llm_model", "llm_analysis_mode", "llm_analysis_notes", "telegram_bot_token", "telegram_chat_id", "symbol_selection_mode"}:
+        if key in {"ai_provider_requested", "symbol_source_mode", "local_llm_endpoint", "local_llm_model", "llm_analysis_mode", "llm_analysis_notes", "telegram_bot_token", "telegram_chat_id", "symbol_selection_mode", "strategy_mode", "scalp_mode", "scalp_timeframe"}:
             return str(value).strip()
         return value
 

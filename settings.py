@@ -135,3 +135,51 @@ CHECK_INTERVAL_MINUTES = 5
 MARKET_OPEN_HOUR = 1
 MARKET_CLOSE_HOUR = 23
 TRADE_DAYS = [0, 1, 2, 3, 4]
+
+# Mode de moteur de signaux : classic | scalping | hybrid
+STRATEGY_MODE = os.getenv("STRATEGY_MODE", "hybrid").strip().lower()
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SCALPING — paramètres du module scalping_strategy.py
+# Timeframe cible : M1 ou M5
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Mode de scalping : "momentum" (breakout) ou "mean_reversion" (rebonds)
+SCALP_MODE = os.getenv("SCALP_MODE", "momentum").strip().lower()
+
+# EMAs rapides pour détecter la micro-tendance
+SCALP_EMA_FAST = int(os.getenv("SCALP_EMA_FAST", "9"))
+SCALP_EMA_SLOW = int(os.getenv("SCALP_EMA_SLOW", "21"))
+
+# Stochastique (K, D, lissage K)
+SCALP_STOCH_K      = int(os.getenv("SCALP_STOCH_K", "5"))
+SCALP_STOCH_D      = int(os.getenv("SCALP_STOCH_D", "3"))
+SCALP_STOCH_SMOOTH = int(os.getenv("SCALP_STOCH_SMOOTH", "3"))
+
+# ATR pour le calcul SL/TP
+SCALP_ATR_PERIOD    = int(os.getenv("SCALP_ATR_PERIOD", "7"))
+SCALP_SL_ATR_MULT   = float(os.getenv("SCALP_SL_ATR_MULT", "1.0"))   # SL = 1x ATR
+SCALP_TP_ATR_MULT   = float(os.getenv("SCALP_TP_ATR_MULT", "1.8"))   # TP = 1.8x ATR (RR ~1:1.8)
+
+# Filtre spread — valeurs en pips
+SCALP_MAX_SPREAD_FOREX  = float(os.getenv("SCALP_MAX_SPREAD_FOREX",  "1.5"))
+SCALP_MAX_SPREAD_GOLD   = float(os.getenv("SCALP_MAX_SPREAD_GOLD",   "25.0"))
+SCALP_MAX_SPREAD_CRYPTO = float(os.getenv("SCALP_MAX_SPREAD_CRYPTO", "60.0"))
+
+# Filtre volume (ratio vs moyenne 10 bougies)
+SCALP_MIN_VOLUME_RATIO = float(os.getenv("SCALP_MIN_VOLUME_RATIO", "1.1"))
+
+# Score minimum pour valider un signal scalping (0-6)
+SCALP_MIN_SCORE = int(os.getenv("SCALP_MIN_SCORE", "3"))
+
+# ADX minimum en mode MOMENTUM (tendance assez forte)
+SCALP_ADX_MIN_TREND = float(os.getenv("SCALP_ADX_MIN_TREND", "20.0"))
+
+# Forcer les Kill Zones uniquement (recommandé)
+SCALP_ONLY_KILL_ZONES = os.getenv("SCALP_ONLY_KILL_ZONES", "true").strip().lower() == "true"
+
+# Nombre max de trades scalping par heure (par instrument)
+SCALP_MAX_TRADES_PER_HOUR = int(os.getenv("SCALP_MAX_TRADES_PER_HOUR", "4"))
+
+# Timeframe MT5 pour le scalping ("M1" ou "M5")
+SCALP_TIMEFRAME = os.getenv("SCALP_TIMEFRAME", "M5").strip().upper()

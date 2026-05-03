@@ -57,15 +57,22 @@ class MessageBus:
         """Envoie un message."""
         # Broadcast si recipient = "*"
         if message.recipient == "*":
-            for agent_name, queue in self.queues.items():
-                if agent_name != message.sender:
+            recipients = self.subscribers.get(message.event_type, [])
+            for agent_name in recipients:
+                if agent_name == message.sender:
+                    continue
+                queue = self.queues.get(agent_name)
+                if queue is not None:
                     await queue.put(message)
         else:
             # Direct si recipient spécifié
             if message.recipient in self.queues:
                 await self.queues[message.recipient].put(message)
             else:
-                self.logger.warning(f"Message perdu: destinataire '{message.recipient}' introuvable (de {message.sender}, événement '{message.event_type}')")
+                print(
+                    f"[MessageBus] Message perdu: destinataire '{message.recipient}' introuvable "
+                    f"(de {message.sender}, événement '{message.event_type}')"
+                )
     
     async def receive(self, agent_name: str, timeout: float = 1.0) -> Optional[Message]:
         """Reçoit un message avec timeout."""

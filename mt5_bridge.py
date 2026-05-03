@@ -32,6 +32,9 @@ class PaperBroker:
             "nav": INITIAL_CAPITAL,
             "open_trades": 0,
             "currency": "USD",
+            "is_cents": False,
+            "display_currency": "$",
+            "cents_ratio": 1,
             "connected": False,
             "provider": "paper",
         }
@@ -418,12 +421,17 @@ class MT5Broker:
             self.status_message = f"MT5 démo actif pour trading automatique: {login} @ {server} ({company})"
         else:
             self.status_message = f"MT5 détecté: {login} @ {server} ({company}) - mode analyse/paper"
+        currency = str(getattr(account, "currency", "USD") or "USD")
+        is_cents = currency in ("USC", "CENTs", "cent") or currency.lower().endswith("c")
         return {
             "balance": float(getattr(account, "balance", INITIAL_CAPITAL)),
             "unrealized_pnl": float(getattr(account, "profit", 0.0)),
             "nav": float(getattr(account, "equity", INITIAL_CAPITAL)),
             "open_trades": len(self.mt5.positions_get() or []),
-            "currency": getattr(account, "currency", "USD"),
+            "currency": currency,
+            "is_cents": is_cents,
+            "display_currency": "\u00a2" if is_cents else "$",
+            "cents_ratio": 100 if is_cents else 1,
             "connected": True,
             "provider": "mt5",
             "server": getattr(account, "server", ""),
