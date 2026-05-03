@@ -542,8 +542,6 @@ HTML_PAGE = r"""<!DOCTYPE html>
     <div class="panel-body">
       <div class="form-grid">
 
-        <div class="field">
-          <label>Filtre symboles (vide = tous)</label>
         <div class="field" style="grid-column:1/-1">
           <label>Instrument</label>
           <div style="padding:8px 12px;border-radius:6px;background:rgba(255,215,0,0.08);border:1px solid #f59e0b;color:#f59e0b;font-weight:600;font-size:0.9em;">🪙 XAUUSDm &mdash; spécialisé (fixé)</div>
@@ -749,7 +747,6 @@ HTML_PAGE = r"""<!DOCTYPE html>
           <input id="scalp-tp-atr" type="number" min="0.5" max="5.0" step="0.1" oninput="scheduleAutoSave()" />
         </div>
         <div class="field">
-          <label>Spread max Forex (p)</label>
           <label>Spread max Gold (p)</label>
           <input id="scalp-spread-gold" type="number" min="5" max="80" step="1" oninput="scheduleAutoSave()" />
         </div>
