@@ -5,7 +5,7 @@ Reçoit signaux + évaluations risques et prend la décision finale d'exécution
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from agent_framework import Agent
 
 

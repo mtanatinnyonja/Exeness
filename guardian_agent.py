@@ -5,7 +5,7 @@ Surveille la position ouverte en continu et décide HOLD/CLOSE/TIGHTEN.
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Dict, List
+from typing import Dict
 from agent_framework import Agent
 from economic_calendar import EconomicCalendar
 from mt5_bridge import build_broker

@@ -9,14 +9,14 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, List
-from agent_framework import Agent, get_message_bus
+from agent_framework import Agent
 from mt5_bridge import build_broker
 from signal_engine import calculate_signal_score, calculate_mtf_signal
 from smart_strategies import build_strategies_context, get_session_score
 from market_context import analyze_market_context
 from learning_store import AgentMemory
 from scalping_strategy import calculate_scalp_signal
-from settings import PRIMARY_TIMEFRAME, CONFIRM_TIMEFRAME, INSTRUMENTS, STRATEGY_MODE, SCALP_TIMEFRAME
+from settings import STRATEGY_MODE, SCALP_TIMEFRAME
 from runtime_db import RuntimeStore
 
 _DATA_DIR = Path("data")

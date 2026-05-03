@@ -309,7 +309,8 @@ class ExecutionAgent(Agent):
             return 0.0
 
     async def _check_positions(self):
-        """Vérifie les positions ouvertes."""        try:
+        """Vérifie les positions ouvertes."""
+        try:
             positions = self.broker.get_open_positions()
             for pos in positions:
                 instrument = pos.get("instrument", "?")
