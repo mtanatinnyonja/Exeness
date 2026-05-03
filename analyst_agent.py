@@ -95,7 +95,11 @@ class AnalystAgent(Agent):
             if len(candles_h1) < 20:
                 return {"symbol": instrument, "reason": "not_enough_data"}
 
-            candles_d1 = self.broker.get_candles(instrument, "D1", 100)
+            candles_d1 = []
+            try:
+                candles_d1 = self.broker.get_candles(instrument, "D1", 100)
+            except Exception as e:
+                self.log("WARN", f"{instrument}: D1 indisponible, fallback H1 ({str(e)[:80]})")
             
             candles_m15 = self.broker.get_candles(instrument, CONFIRM_TIMEFRAME, 60)
             

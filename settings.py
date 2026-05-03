@@ -19,7 +19,7 @@ if _env_path.exists():
 
 # === BROKER ===
 BROKER = "mt5"  # "mt5" | "demo"
-PAPER_TRADING = False
+PAPER_TRADING = False  # Mettre True pour activer le paper trading
 
 # === META TRADER 5 / EXNESS ===
 MT5_TERMINAL_PATH = ""      # Exemple: C:/Program Files/MetaTrader 5/terminal64.exe

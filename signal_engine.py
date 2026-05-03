@@ -102,6 +102,52 @@ def calculate_atr(candles: List[Dict], period: int = ATR_PERIOD) -> float:
     return atr
 
 
+def calculate_volume_filter(candles: List[Dict], lookback: int = 20) -> Dict:
+    volumes = [float(c.get("tick_volume", 0) or 0) for c in candles[-lookback:]]
+    if not volumes or sum(volumes) == 0:
+        return {"volume_ratio": 1.0, "is_high_volume": False, "volume_signal": "absent"}
+    avg_vol = sum(volumes) / len(volumes)
+    last_vol = float(candles[-1].get("tick_volume", 0) or 0)
+    ratio = (last_vol / avg_vol) if avg_vol > 0 else 1.0
+    return {
+        "volume_ratio": round(ratio, 2),
+        "is_high_volume": ratio >= 1.3,
+        "volume_signal": "confirme" if ratio >= 1.3 else "faible",
+    }
+
+
+def calculate_obv(candles: List[Dict]) -> str:
+    if len(candles) < 2:
+        return "neutre"
+
+    volumes = [float(c.get("tick_volume", 0) or 0) for c in candles]
+    if not volumes or sum(volumes) == 0:
+        return "neutre"
+
+    obv_values = [0.0]
+    obv = 0.0
+    for i in range(1, len(candles)):
+        prev_close = float(candles[i - 1].get("close", 0) or 0)
+        close = float(candles[i].get("close", 0) or 0)
+        vol = float(candles[i].get("tick_volume", 0) or 0)
+        if close > prev_close:
+            obv += vol
+        elif close < prev_close:
+            obv -= vol
+        obv_values.append(obv)
+
+    if len(obv_values) < 2:
+        return "neutre"
+
+    lookback = min(10, len(obv_values) - 1)
+    slope = obv_values[-1] - obv_values[-1 - lookback]
+    if slope > 0:
+        return "haussier"
+    if slope < 0:
+        return "baissier"
+    return "neutre"
+
+
 def _recompute_min_candles() -> int:
     return max(int(RSI_PERIOD) * 2 + 1, 34, int(MA_SLOW), 60)
 
@@ -363,73 +409,6 @@ def _candle_volume(candle: Dict) -> float:
         return 0.0
 
 
-def calculate_volume_filter(candles: List[Dict], lookback: int = 20) -> Dict:
-    """
-    Filtre volume simple sur les dernières bougies.
-    Fallback robuste si volume absent/invalide.
-    """
-    if not candles:
-        return {
-            "volume_ratio": 1.0,
-            "is_high_volume": False,
-            "volume_signal": "faible",
-        }
-
-    recent = candles[-lookback:] if len(candles) >= lookback else candles
-    vols = [_candle_volume(c) for c in recent]
-    last_vol = _candle_volume(candles[-1])
-    avg_vol = (sum(vols) / len(vols)) if vols else 0.0
-
-    if avg_vol <= 0 or last_vol <= 0:
-        return {
-            "volume_ratio": 1.0,
-            "is_high_volume": False,
-            "volume_signal": "faible",
-        }
-
-    volume_ratio = last_vol / avg_vol
-    is_high_volume = volume_ratio >= 1.3
-    return {
-        "volume_ratio": round(volume_ratio, 3),
-        "is_high_volume": is_high_volume,
-        "volume_signal": "confirme" if is_high_volume else "faible",
-    }
-
-
-def calculate_obv(candles: List[Dict]) -> Dict:
-    """
-    On Balance Volume et pente sur 10 bougies.
-    Retourne un trend: haussiere/baissiere/neutre.
-    """
-    if len(candles) < 2:
-        return {"obv_trend": "neutre", "obv_slope": 0.0}
-
-    obv = 0.0
-    series = [obv]
-    for i in range(1, len(candles)):
-        prev_close = float(candles[i - 1].get("close", 0.0) or 0.0)
-        close = float(candles[i].get("close", 0.0) or 0.0)
-        vol = _candle_volume(candles[i])
-        if close > prev_close:
-            obv += vol
-        elif close < prev_close:
-            obv -= vol
-        series.append(obv)
-
-    if len(series) < 2:
-        return {"obv_trend": "neutre", "obv_slope": 0.0}
-
-    window = min(10, len(series) - 1)
-    slope = (series[-1] - series[-1 - window]) / max(window, 1)
-    if slope > 0:
-        trend = "haussiere"
-    elif slope < 0:
-        trend = "baissiere"
-    else:
-        trend = "neutre"
-    return {"obv_trend": trend, "obv_slope": round(slope, 3)}
-
-
 # ---------------------------------------------------------------------------
 # Régime marché
 # ---------------------------------------------------------------------------
@@ -641,9 +620,6 @@ def calculate_signal_score(candles: List[Dict], instrument: str = "") -> Dict:
     momentum_5 = calculate_price_momentum(closes, 5)
     momentum_20 = calculate_price_momentum(closes, 20)
     trend_strength = calculate_trend_strength(closes, 20)
-    volume_filter = calculate_volume_filter(candles, lookback=20)
-    obv_data = calculate_obv(candles)
-    obv_trend = obv_data.get("obv_trend", "neutre")
 
     # S/R via pivots (fenêtre 40 bougies, hors la dernière)
     resistance, support = calculate_support_resistance(highs[:-1], lows[:-1], window=40)
@@ -651,6 +627,8 @@ def calculate_signal_score(candles: List[Dict], instrument: str = "") -> Dict:
     regime = detect_market_regime(current_price, atr, ma_fast, ma_slow)
     pip_factor = _pip_factor_for(current_price, instrument)
     atr_pips = round(atr * pip_factor, 1)
+    vol_filter = calculate_volume_filter(candles)
+    obv_trend = calculate_obv(candles)
 
     distance_to_resistance = max(0.0, (resistance - current_price) * pip_factor)
     distance_to_support = max(0.0, (current_price - support) * pip_factor)
@@ -688,8 +666,8 @@ def calculate_signal_score(candles: List[Dict], instrument: str = "") -> Dict:
         "rr_sell": rr_sell,
         "breakout_up": breakout_up,
         "breakout_down": breakout_down,
-        "volume_ratio": float(volume_filter.get("volume_ratio", 1.0) or 1.0),
-        "volume_signal": str(volume_filter.get("volume_signal", "faible")),
+        "volume_ratio": vol_filter["volume_ratio"],
+        "volume_signal": vol_filter["volume_signal"],
         "obv_trend": str(obv_trend),
     }
 
@@ -728,6 +706,26 @@ def calculate_signal_score(candles: List[Dict], instrument: str = "") -> Dict:
     elif macd < macd_signal and macd < 0:
         bearish_signals += 1
         details["macd_signal_dir"] = "macd bearish"
+
+    # --- Volume ---
+    if vol_filter["is_high_volume"]:
+        if bullish_signals > bearish_signals:
+            bullish_signals += 0.3
+            details["volume_note"] = "volume élevé confirme haussier"
+        elif bearish_signals > bullish_signals:
+            bearish_signals += 0.3
+            details["volume_note"] = "volume élevé confirme baissier"
+
+    if obv_trend == "haussier" and bullish_signals > bearish_signals:
+        bullish_signals += 0.3
+    elif obv_trend == "baissier" and bearish_signals > bullish_signals:
+        bearish_signals += 0.3
+    elif obv_trend != "neutre":
+        # OBV contre le signal : pénalité légère
+        if bullish_signals > bearish_signals and obv_trend == "baissier":
+            bullish_signals -= 0.3
+        elif bearish_signals > bullish_signals and obv_trend == "haussier":
+            bearish_signals -= 0.3
 
     # --- Momentum ---
     if momentum_5 > 0.08 and momentum_20 > 0:
@@ -785,23 +783,6 @@ def calculate_signal_score(candles: List[Dict], instrument: str = "") -> Dict:
         bearish_signals += 1
         details["pattern_signal"] = f"{candle_pattern} → bearish"
 
-    # --- Ajustements volume/OBV sur la direction dominante ---
-    is_high_volume = bool(volume_filter.get("is_high_volume", False))
-    if bullish_signals > bearish_signals:
-        if obv_trend == "baissiere":
-            bullish_signals -= 0.5
-            details["obv_alignment"] = "BUY pénalisé: OBV baissier"
-        if is_high_volume:
-            bullish_signals += 0.3
-            details["volume_alignment"] = "BUY confirmé par volume"
-    elif bearish_signals > bullish_signals:
-        if obv_trend == "haussiere":
-            bearish_signals -= 0.5
-            details["obv_alignment"] = "SELL pénalisé: OBV haussier"
-        if is_high_volume:
-            bearish_signals += 0.3
-            details["volume_alignment"] = "SELL confirmé par volume"
-
     # --- Résultat ---
     if bullish_signals > bearish_signals:
         score = min(5, int(round(bullish_signals)))
@@ -839,66 +820,61 @@ def calculate_signal_score(candles: List[Dict], instrument: str = "") -> Dict:
     }
 
 
-def calculate_mtf_signal(candles_h1: List[Dict], candles_d1: Optional[List[Dict]], instrument: str = "") -> Dict:
+def calculate_mtf_signal(candles_h1: List[Dict], candles_d1: List[Dict], instrument: str = "") -> Dict:
     """
-    Calcule un signal multi-timeframe (H1 principal, D1 tendance de fond).
-    Rétrocompatible: si D1 absent, retourne le signal H1 inchangé.
+    Signal multi-timeframe : signal H1 confirmé par tendance D1.
+    Si candles_d1 est None ou vide, se comporte comme calculate_signal_score().
     """
-    h1_signal = calculate_signal_score(candles_h1, instrument)
+    # Signal principal H1
+    signal_h1 = calculate_signal_score(candles_h1, instrument)
 
-    # Rétrocompatibilité stricte sur le score/direction quand D1 indisponible.
-    if not candles_d1:
-        h1_signal["mtf_confirmed"] = False
-        h1_signal["d1_direction"] = None
-        h1_signal["d1_score"] = 0
-        h1_signal["confluence"] = "neutral"
-        h1_details = h1_signal.get("details", {}) or {}
-        h1_details["mtf_confirmed"] = False
-        h1_details["d1_direction"] = None
-        h1_details["d1_score"] = 0
-        h1_details["confluence"] = "neutral"
-        h1_details["human_summary"] = build_human_analysis_summary(
-            h1_details,
-            h1_signal.get("direction"),
-            int(h1_signal.get("score", 0) or 0),
-        )
-        h1_signal["details"] = h1_details
-        return h1_signal
+    # Si pas de données D1, retourner H1 tel quel avec flag
+    if not candles_d1 or len(candles_d1) < _MIN_CANDLES:
+        signal_h1["mtf_confirmed"] = False
+        signal_h1["d1_direction"] = None
+        signal_h1["d1_score"] = 0
+        signal_h1["confluence"] = "no_d1_data"
+        return signal_h1
 
-    d1_signal = calculate_signal_score(candles_d1, instrument)
-    h1_direction = h1_signal.get("direction")
-    d1_direction = d1_signal.get("direction")
-    d1_score = int(d1_signal.get("score", 0) or 0)
-    adjusted_score = int(h1_signal.get("score", 0) or 0)
-    confluence = "neutral"
-    mtf_confirmed = False
+    # Signal D1 (tendance de fond)
+    signal_d1 = calculate_signal_score(candles_d1, instrument)
+    d1_direction = signal_d1.get("direction")
+    d1_score = signal_d1.get("score", 0)
+    h1_direction = signal_h1.get("direction")
 
-    if h1_direction in ("BUY", "SELL"):
-        if d1_direction == h1_direction:
+    # Règles de confluence
+    score = signal_h1.get("score", 0)
+    if h1_direction and d1_direction:
+        if h1_direction == d1_direction:
             confluence = "aligned"
             mtf_confirmed = True
-        elif d1_direction in ("BUY", "SELL") and d1_direction != h1_direction:
-            confluence = "counter"
-            adjusted_score = max(0, adjusted_score - 2)
+            # Bonus léger si D1 fort
+            if d1_score >= 3:
+                score = min(5, score + 1)
         else:
-            confluence = "neutral"
-            adjusted_score = max(0, adjusted_score - 1)
+            confluence = "counter"
+            mtf_confirmed = False
+            score = max(0, score - 2)  # pénalité forte contre-tendance
+    elif not d1_direction:
+        confluence = "neutral"
+        mtf_confirmed = False
+        score = max(0, score - 1)  # pénalité légère marché D1 neutre
+    else:
+        confluence = "neutral"
+        mtf_confirmed = False
 
-    result = dict(h1_signal)
-    result["score"] = adjusted_score
+    # Direction annulée si score trop bas après pénalité
+    direction = h1_direction if score >= 2 else None
+
+    result = dict(signal_h1)
+    result["score"] = score
+    result["direction"] = direction
     result["mtf_confirmed"] = mtf_confirmed
     result["d1_direction"] = d1_direction
     result["d1_score"] = d1_score
     result["confluence"] = confluence
-
-    details = dict(result.get("details", {}) or {})
-    details["mtf_confirmed"] = mtf_confirmed
-    details["d1_direction"] = d1_direction
-    details["d1_score"] = d1_score
-    details["confluence"] = confluence
-    details["human_summary"] = build_human_analysis_summary(details, result.get("direction"), adjusted_score)
-    result["details"] = details
-
+    result["details"]["mtf_confluence"] = confluence
+    result["details"]["d1_direction"] = d1_direction
     return result
 
 

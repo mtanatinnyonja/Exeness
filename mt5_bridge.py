@@ -14,7 +14,6 @@ from settings import (
     MT5_MAX_VISIBLE_SYMBOLS, PREFERRED_SYMBOLS,
 )
 from runtime_db import RuntimeStore
-from paper_broker import PaperBroker as ExternalPaperBroker
 
 
 class PaperBroker:
@@ -670,12 +669,15 @@ class MT5Broker:
 
 def build_broker():
     if bool(PAPER_TRADING):
-        return ExternalPaperBroker()
+        from paper_broker import PaperBroker
+        return PaperBroker()
 
     target = (BROKER or "mt5").lower().strip()
     if target == "mt5":
         broker = MT5Broker()
         if broker.connected or broker.mt5 is not None:
             return broker
-        return ExternalPaperBroker()
-    return ExternalPaperBroker()
+        from paper_broker import PaperBroker
+        return PaperBroker()
+    from paper_broker import PaperBroker
+    return PaperBroker()

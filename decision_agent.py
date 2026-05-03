@@ -4,7 +4,7 @@ Autonome, vote et décide BUY/SELL basé sur consensus.
 """
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 from agent_framework import Agent
 
@@ -14,13 +14,15 @@ class DecisionAgent(Agent):
     
     def __init__(self):
         super().__init__("DecisionAgent")
-        # instrument -> {"payload": signal_data, "timestamp": datetime(UTC)}
-        self.pending_signals: Dict[str, Dict[str, Any]] = {}
+        # Structure: {instrument: {"payload": signal_data, "timestamp": datetime, "signal_id": str}}
+        self.pending_signals: Dict[str, Dict] = {}
         self.decisions_made = 0
         self.expired_signals = 0
         self.min_confidence = 0.60
         self.min_risk_score = 3
         self.signal_ttl_seconds = 90
+        self.cleanup_interval_seconds = 30
+        self._last_cleanup_at = datetime.now(timezone.utc)
         self.instrument_cooldown_seconds = 120
         self.last_decision_at: Dict[str, datetime] = {}
     
@@ -32,21 +34,21 @@ class DecisionAgent(Agent):
     async def run(self):
         """Boucle autonome — synthétise et décide."""
         while self.running:
-            self._cleanup_expired_signals()
+            now = datetime.now(timezone.utc)
+            if (now - self._last_cleanup_at).total_seconds() >= self.cleanup_interval_seconds:
+                self._cleanup_expired_signals()
+                self._last_cleanup_at = now
+
             message = await self.wait_for_message(timeout=1.0)
             
             if message and message.event_type == "signal":
                 instrument = message.payload.get("instrument", "?")
-                now_utc = datetime.now(timezone.utc)
-                if instrument in self.pending_signals:
-                    self.log("INFO", f"signal ignoré pour {instrument} — signal déjà en attente")
-                else:
-                    self.pending_signals[instrument] = {
-                        "payload": dict(message.payload),
-                        "signal_id": message.payload.get("signal_id", ""),
-                        "timestamp": now_utc,
-                    }
-                    self.log("DEBUG", f"{instrument}: Signal en attente d'approval risque")
+                self.pending_signals[instrument] = {
+                    "payload": message.payload,
+                    "timestamp": datetime.now(timezone.utc),
+                    "signal_id": message.payload.get("signal_id", ""),
+                }
+                self.log("DEBUG", f"{instrument}: Signal en attente d'approval risque")
             
             elif message and message.event_type == "risk_decision":
                 await self._process_risk_decision(message.payload)
@@ -76,21 +78,18 @@ class DecisionAgent(Agent):
         """Traite une décision de risque et décide si on trade."""
         instrument = risk_data.get("instrument", "?")
         approved = risk_data.get("approved", False)
+        risk_signal_id = risk_data.get("signal_id", "")
         
-        # Vérifier si on a le signal correspondant
-        if instrument not in self.pending_signals:
+        pending = self.pending_signals.get(instrument)
+        if not pending:
             return
 
-        # Vérifier que la décision de risque correspond bien au signal en attente
-        signal_item = self.pending_signals[instrument]
-        pending_signal_id = signal_item.get("signal_id", "")
-        incoming_signal_id = risk_data.get("signal_id", "")
-        if pending_signal_id and incoming_signal_id and pending_signal_id != incoming_signal_id:
-            self.log("WARN", f"{instrument}: risk_decision ignoré (signal_id mismatch)")
+        if risk_signal_id and pending["signal_id"] and risk_signal_id != pending["signal_id"]:
+            self.log("WARN", f"{instrument}: signal_id mismatch, signal ignoré")
             return
 
-        self.pending_signals.pop(instrument)
-        signal_data = signal_item.get("payload", {})
+        signal_item = self.pending_signals.pop(instrument)
+        signal_data = signal_item["payload"]
         ts = signal_item.get("timestamp")
         if not isinstance(ts, datetime):
             self.expired_signals += 1
