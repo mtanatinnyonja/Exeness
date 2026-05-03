@@ -13,7 +13,7 @@ from circuit_breaker import CircuitBreaker
 from audit_logger import get_audit_logger
 from telegram_notifier import TelegramNotifier
 from signal_engine import calculate_atr
-from settings import MAX_RISK_PER_TRADE, MAX_OPEN_POSITIONS, REQUIRE_HUMAN_CONFIRMATION
+from settings import MAX_RISK_PER_TRADE, MAX_OPEN_POSITIONS, REQUIRE_HUMAN_CONFIRMATION, MAX_TRADES_PER_DAY
 
 
 class ExecutionAgent(Agent):
@@ -108,6 +108,7 @@ class ExecutionAgent(Agent):
             return
         # Reset after passing gate so the next entry must reconfirm.
         self._signal_confirmations[key] = []
+        self.log("INFO", f"{instrument}: Confirmation {self.required_confirmations}/{self.required_confirmations} ✅ — passage exécution ({direction} conf={confidence:.0%})")
 
         # Human confirmation gate: si activé, mettre le trade en attente d'approbation.
         try:
@@ -142,6 +143,12 @@ class ExecutionAgent(Agent):
             return
         
         try:
+            # Limite journalière de trades
+            trades_today = self.memory.get_trades_started_today()
+            if trades_today >= MAX_TRADES_PER_DAY:
+                self.log("INFO", f"{instrument}: Limite journalière atteinte ({trades_today}/{MAX_TRADES_PER_DAY} trades) — pause jusqu'à demain")
+                return
+
             # Vérifier les limites
             open_positions = self.broker.get_open_positions()
             # Hard guard: single-position mode to prevent stacking entries.
@@ -183,6 +190,10 @@ class ExecutionAgent(Agent):
                 comment=f"AUTO|{direction}"
             )
             
+            if not order:
+                self.log("WARN", f"{instrument}: Ordre refusé par le broker (None) — vérifie allow_trade_execution et la connexion MT5")
+                return
+
             if order:
                 # Enregistrer
                 trade_id = self.memory.add_trade({
