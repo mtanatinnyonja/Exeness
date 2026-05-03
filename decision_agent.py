@@ -1,6 +1,6 @@
 """
-Agent Décideur — Reçoit signaux + évaluations risques et prend décision finale.
-Autonome, vote et décide BUY/SELL basé sur consensus.
+Agent Décideur — Spécialisé XAUUSDm uniquement.
+Reçoit signaux + évaluations risques et prend la décision finale d'exécution.
 """
 
 import asyncio
@@ -10,20 +10,19 @@ from agent_framework import Agent
 
 
 class DecisionAgent(Agent):
-    """Décideur autonome — Synthétise signaux et risques pour décision finale."""
+    """Décideur XAUUSDm — Synthètise signaux et risques pour décision finale."""
     
     def __init__(self):
         super().__init__("DecisionAgent")
-        # Structure: {instrument: {"payload": signal_data, "timestamp": datetime, "signal_id": str}}
         self.pending_signals: Dict[str, Dict] = {}
         self.decisions_made = 0
         self.expired_signals = 0
-        self.min_confidence = 0.60
-        self.min_risk_score = 3
+        self.min_confidence = 0.60         # 3/5 minimum
+        self.min_risk_score = 3             # Risk score minimum XAU
         self.signal_ttl_seconds = 90
         self.cleanup_interval_seconds = 30
         self._last_cleanup_at = datetime.now(timezone.utc)
-        self.instrument_cooldown_seconds = 120
+        self.instrument_cooldown_seconds = 120  # 2 min entre trades XAU
         self.last_decision_at: Dict[str, datetime] = {}
     
     async def on_startup(self):
@@ -32,7 +31,7 @@ class DecisionAgent(Agent):
         await self.bus.subscribe(self.name, ["signal", "risk_decision"])
     
     async def run(self):
-        """Boucle autonome — synthétise et décide."""
+        """Boucle autonome — synthètise et décide (XAUUSDm only)."""
         while self.running:
             now = datetime.now(timezone.utc)
             if (now - self._last_cleanup_at).total_seconds() >= self.cleanup_interval_seconds:
@@ -75,8 +74,12 @@ class DecisionAgent(Agent):
             self.log("WARN", f"signal {instrument} expiré après 90s sans réponse RiskAgent")
     
     async def _process_risk_decision(self, risk_data: Dict[str, Any]):
-        """Traite une décision de risque et décide si on trade."""
+        """Traite une décision de risque XAU et décide si on trade."""
         instrument = risk_data.get("instrument", "?")
+
+        # Ignorer tout signal non-XAU
+        if str(instrument).upper() != "XAUUSDM":
+            return
         approved = risk_data.get("approved", False)
         risk_signal_id = risk_data.get("signal_id", "")
         
@@ -146,6 +149,6 @@ class DecisionAgent(Agent):
             decision
         )
         
-        self.log("INFO", f"✅ {instrument}: DÉCISION {direction} (conf {decision['confidence']:.1%})")
+        self.log("INFO", f"✅ XAUUSDm: DÉCISION {direction} | conf {decision['confidence']:.1%} | SL={decision['sl_pips']}p TP={decision['tp_pips']}p | #{self.decisions_made + 1}")
         self.decisions_made += 1
         self.last_decision_at[instrument] = now

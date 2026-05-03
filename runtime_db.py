@@ -89,9 +89,9 @@ class RuntimeStore:
             "local_llm_endpoint": LOCAL_LLM_ENDPOINT,
             "local_llm_model": LOCAL_LLM_MODEL,
             "local_llm_timeout": int(LOCAL_LLM_TIMEOUT),
-            "symbol_source_mode": "visible",
-            "preferred_symbols": list(PREFERRED_SYMBOLS),
-            "max_symbols_per_cycle": int(MT5_MAX_VISIBLE_SYMBOLS),
+            "symbol_source_mode": "fixed",
+            "preferred_symbols": ["XAUUSDm"],
+            "max_symbols_per_cycle": 1,
             "allow_trade_execution": bool(ALLOW_TRADE_EXECUTION),
             "max_risk_per_trade": float(MAX_RISK_PER_TRADE),
             "daily_target": float(DAILY_TARGET),
@@ -109,7 +109,7 @@ class RuntimeStore:
             "telegram_enabled": True,
             "telegram_bot_token": TELEGRAM_BOT_TOKEN,
             "telegram_chat_id": TELEGRAM_CHAT_ID,
-            "symbol_selection_mode": SYMBOL_SELECTION_MODE,
+            "symbol_selection_mode": "fixed",
             "strategy_mode": str(STRATEGY_MODE),
             "require_human_confirmation": bool(REQUIRE_HUMAN_CONFIRMATION),
             "scalp_mode": str(SCALP_MODE),
@@ -182,7 +182,9 @@ class RuntimeStore:
                 settings[new_key] = settings[old_key]
 
         settings["ai_provider_requested"] = "ollama"
-        settings["symbol_source_mode"] = "visible"
+        settings["symbol_source_mode"] = "fixed"
+        settings["preferred_symbols"] = ["XAUUSDm"]
+        settings["symbol_selection_mode"] = "fixed"
         return settings
 
     def update_settings(self, payload: Dict[str, Any]) -> Dict[str, Any]:

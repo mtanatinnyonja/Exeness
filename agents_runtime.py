@@ -1,6 +1,6 @@
 """
 Runtime des agents IA — Lance tous les agents en parallèle asynchrone.
-C'est l'entrée principale pour démarrer le système décentralisé.
+Système spécialisé XAUUSDm (Or / XAUUSD).
 """
 
 import asyncio
@@ -33,7 +33,7 @@ class AgentsRuntime:
         """Démarre tous les agents."""
         self.running = True
         print("\n" + "="*70)
-        print("  🤖 AGENTS IA AUTONOMES — DÉMARRAGE")
+        print("  � EXENESS XAUUSDm SPECIALIST — $100 DEMO — DÉMARRAGE")
         print("="*70 + "\n")
         
         # Démarrer chaque agent

@@ -149,6 +149,15 @@ class ExecutionAgent(Agent):
                 self.log("INFO", f"{instrument}: Limite journalière atteinte ({trades_today}/{MAX_TRADES_PER_DAY} trades) — pause jusqu'à demain")
                 return
 
+            # Garde objectif / limite perte journalière
+            daily_pnl = self._get_daily_pnl()
+            if daily_pnl >= 5.0:
+                self.log("INFO", f"✅ Objectif journalier atteint (${daily_pnl:.2f}) — stop trading aujourd'hui")
+                return
+            if daily_pnl <= -10.0:
+                self.log("WARN", f"🛑 Limite perte journalière atteinte (${daily_pnl:.2f}) — stop trading")
+                return
+
             # Vérifier les limites
             open_positions = self.broker.get_open_positions()
             # Hard guard: single-position mode to prevent stacking entries.
@@ -171,14 +180,20 @@ class ExecutionAgent(Agent):
             
             # Récupérer l'account
             account = self.broker.get_account_summary()
-            balance = account.get("balance", 1000)
-            
-            # Calcul du risque et volume
-            sl_pips = decision.get("sl_pips", 30)
+            balance = float(account.get("balance", 100.0) or 100.0)
+
+            # Calcul lot size adapté $100 XAU demo
+            # XAUUSDm : 1 lot = $1 par pip / 0.01 lot = $0.01 par pip
+            # Risque 1.5% de $100 = $1.50 par trade
+            sl_pips = decision.get("sl_pips", 20)
             tp_pips = decision.get("tp_pips", 60)
-            risk_usd = balance * MAX_RISK_PER_TRADE
-            
-            volume = self.broker.calculate_volume(instrument, risk_usd, sl_pips)
+            risk_usd = balance * MAX_RISK_PER_TRADE  # 1.5% du solde réel
+            pip_value_per_lot = 1.0  # XAU standard account
+            lot = risk_usd / max(float(sl_pips) * pip_value_per_lot, 0.01)
+            lot = max(0.01, min(0.50, round(lot / 0.01) * 0.01))
+            volume = lot
+
+            self.log("INFO", f"📊 XAU {direction} | lot={lot} | SL={sl_pips}p | TP={tp_pips}p | risque=${risk_usd:.2f}")
             
             # Placer l'ordre
             order = self.broker.place_market_order(
@@ -262,9 +277,39 @@ class ExecutionAgent(Agent):
                 return
             self.log("ERROR", f"{instrument}: {err[:100]}")
     
-    async def _check_positions(self):
-        """Vérifie les positions ouvertes."""
+    def _get_daily_pnl(self) -> float:
+        """Calcule le P&L réalisé de la journée courante depuis trades_history.json."""
         try:
+            from pathlib import Path
+            import json as _json
+            trades_file = Path("data/trades_history.json")
+            if not trades_file.exists():
+                return 0.0
+            trades = _json.loads(trades_file.read_text(encoding="utf-8"))
+            if not isinstance(trades, list):
+                return 0.0
+            today = datetime.now(timezone.utc).date()
+            day_pnl = 0.0
+            for t in trades:
+                if str(t.get("status", "")).lower() != "closed":
+                    continue
+                closed_str = t.get("closed_at") or t.get("timestamp", "")
+                if not closed_str:
+                    continue
+                try:
+                    closed_dt = datetime.fromisoformat(str(closed_str).replace("Z", "+00:00"))
+                    if closed_dt.tzinfo is None:
+                        closed_dt = closed_dt.replace(tzinfo=timezone.utc)
+                    if closed_dt.astimezone(timezone.utc).date() == today:
+                        day_pnl += float(t.get("pnl", 0.0) or 0.0)
+                except Exception:
+                    continue
+            return round(day_pnl, 2)
+        except Exception:
+            return 0.0
+
+    async def _check_positions(self):
+        """Vérifie les positions ouvertes."""        try:
             positions = self.broker.get_open_positions()
             for pos in positions:
                 instrument = pos.get("instrument", "?")
@@ -383,11 +428,13 @@ class ExecutionAgent(Agent):
                 self.log("INFO", f"{instrument}: Ordre ignoré (position déjà ouverte)")
                 return
             account = self.broker.get_account_summary()
-            balance = account.get("balance", 1000)
-            sl_pips = decision.get("sl_pips", 30)
+            balance = float(account.get("balance", 100.0) or 100.0)
+            sl_pips = decision.get("sl_pips", 20)
             tp_pips = decision.get("tp_pips", 60)
             risk_usd = balance * MAX_RISK_PER_TRADE
-            volume = self.broker.calculate_volume(instrument, risk_usd, sl_pips)
+            pip_value_per_lot = 1.0  # XAU standard account
+            lot = risk_usd / max(float(sl_pips) * pip_value_per_lot, 0.01)
+            volume = max(0.01, min(0.50, round(lot / 0.01) * 0.01))
             order = self.broker.place_market_order(
                 instrument=instrument,
                 direction=direction,

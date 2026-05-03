@@ -918,6 +918,58 @@ HTML_PAGE = r"""<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- XAUUSDM LIVE PANEL -->
+  <div class="panel" style="margin-bottom:16px;border-color:rgba(255,184,32,0.35);">
+    <div class="panel-header" style="background:rgba(255,184,32,0.05);">
+      <span class="panel-title" style="color:var(--amber)">🪵 XAUUSDm Live</span>
+      <span id="xau-pnl-badge" class="refresh-info" style="font-size:13px;font-weight:700;">—</span>
+    </div>
+    <div class="panel-body">
+      <!-- Prix et spread -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px;">
+        <div class="mini-kpi" style="text-align:left;padding:10px 14px;">
+          <div class="label">Bid</div><div class="value" id="xau-bid" style="color:var(--amber)">—</div>
+        </div>
+        <div class="mini-kpi" style="text-align:left;padding:10px 14px;">
+          <div class="label">Ask</div><div class="value" id="xau-ask" style="color:var(--amber)">—</div>
+        </div>
+        <div class="mini-kpi" style="text-align:left;padding:10px 14px;">
+          <div class="label">Spread</div><div class="value" id="xau-spread">—</div>
+        </div>
+        <div class="mini-kpi" style="text-align:left;padding:10px 14px;">
+          <div class="label">P&amp;L Jour</div><div class="value" id="xau-day-pnl">—</div>
+        </div>
+        <div class="mini-kpi" style="text-align:left;padding:10px 14px;">
+          <div class="label">Trades Jour</div><div class="value" id="xau-day-trades">—</div>
+        </div>
+      </div>
+      <!-- Barre de progression objectif -->
+      <div style="margin-bottom:14px;">
+        <div style="display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;color:var(--muted);margin-bottom:4px;">
+          <span>Progression objectif journalier</span><span id="xau-goal-label">$0.00 / $5.00</span>
+        </div>
+        <div class="api-bar-track"><div class="api-bar-fill" id="xau-goal-bar" style="width:0%"></div></div>
+      </div>
+      <!-- Position ouverte XAU -->
+      <div id="xau-position-wrap" style="display:none;padding:12px;border-radius:10px;background:rgba(255,184,32,0.06);border:1px solid rgba(255,184,32,0.2);margin-bottom:12px;">
+        <div style="font-family:var(--mono);font-size:11px;color:var(--amber);font-weight:600;margin-bottom:8px;">Position ouverte</div>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;font-family:var(--mono);font-size:12px;">
+          <span>Dir: <strong id="xau-pos-dir">—</strong></span>
+          <span>Entrée: <strong id="xau-pos-entry">—</strong></span>
+          <span>P&amp;L: <strong id="xau-pos-pnl">—</strong></span>
+          <span>SL: <strong id="xau-pos-sl">—</strong></span>
+          <span>TP: <strong id="xau-pos-tp">—</strong></span>
+          <span>Lot: <strong id="xau-pos-lot">—</strong></span>
+        </div>
+      </div>
+      <!-- Derniers signaux XAU -->
+      <div>
+        <div style="font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.1em;margin-bottom:6px;">Derniers signaux XAUUSDm</div>
+        <div id="xau-signals-list" style="font-family:var(--mono);font-size:12px;color:var(--muted);">En attente de signal...</div>
+      </div>
+    </div>
+  </div>
+
   <!-- KPIs -->
   <div class="kpi-grid">
     <div class="kpi">
@@ -928,7 +980,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
     <div class="kpi">
       <div class="kpi-label">P&L Aujourd'hui</div>
       <div class="kpi-value" id="daily-pnl">—</div>
-      <div class="kpi-sub" id="daily-pnl-sub">vs objectif $2.00</div>
+      <div class="kpi-sub" id="daily-pnl-sub">vs objectif $5.00</div>
     </div>
     <div class="kpi">
       <div class="kpi-label">P&L Total</div>
@@ -1067,7 +1119,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
 </div>
 
 <script>
-let countdown = 3;
+let countdown = 5;
 let autoAiCountdown = 30;
 let autoSaveTimer = null;
 let autoAiEnabled = true;
@@ -2148,6 +2200,10 @@ async function fetchStatus() {
     document.getElementById('last-update').textContent =
       new Date().toLocaleTimeString('fr-FR');
 
+    // ── XAUUSDm Live panel ──────────────────────────────────────────────
+    updateXauLivePanel(data);
+    // ────────────────────────────────────────────────────────────────────
+
     // Log
     const logs = data.session_log || [];
     const logEl = document.getElementById('log-container');
@@ -2255,6 +2311,94 @@ async function fetchStatus() {
 }
 
 // Countdown & auto-refresh
+// ── XAUUSDm Live panel update ────────────────────────────────────────────
+function updateXauLivePanel(data) {
+  const sym = '$';
+  // Prix bid/ask depuis live_snapshot ou open_positions
+  const snap = data.live_snapshot || {};
+  const xauPos = (data.open_positions || []).find(p => String(p.instrument||'').toUpperCase() === 'XAUUSDM');
+
+  // Bid/Ask
+  const bid = snap.bid || snap.close || 0;
+  const ask = snap.ask || (bid > 0 ? bid + (snap.spread_pips || 0) * 0.1 : 0);
+  document.getElementById('xau-bid').textContent = bid > 0 ? bid.toFixed(2) : '—';
+  document.getElementById('xau-ask').textContent = ask > 0 ? ask.toFixed(2) : '—';
+
+  // Spread
+  const spreadVal = snap.spread_pips || 0;
+  const spreadEl = document.getElementById('xau-spread');
+  spreadEl.textContent = spreadVal > 0 ? spreadVal.toFixed(1) + 'p' : '—';
+  spreadEl.style.color = spreadVal > 0 && spreadVal > 6 ? 'var(--red)' : 'var(--green)';
+
+  // P&L jour
+  const dpnl = parseFloat(data.daily_pnl || 0);
+  const dayPnlEl = document.getElementById('xau-day-pnl');
+  let pnlIcon = dpnl >= 5.0 ? '🏆' : dpnl <= -10.0 ? '⛔' : dpnl > 0 ? '🟢' : dpnl < 0 ? '🔴' : '⚪';
+  dayPnlEl.innerHTML = pnlIcon + ' <span style="color:' + (dpnl >= 0 ? 'var(--green)' : 'var(--red)') + ';font-weight:700;">' + (dpnl >= 0 ? '+' : '') + sym + dpnl.toFixed(2) + '</span>';
+
+  // Trades jour
+  const todayTrades = (data.recent_trades_today || 0);
+  document.getElementById('xau-day-trades').textContent = todayTrades + ' / 5';
+
+  // Badge de titre
+  const badgeEl = document.getElementById('xau-pnl-badge');
+  if (dpnl >= 5.0) {
+    badgeEl.innerHTML = '🏆 Objectif atteint ! +' + sym + dpnl.toFixed(2);
+    badgeEl.style.color = 'var(--green)';
+  } else if (dpnl <= -10.0) {
+    badgeEl.innerHTML = '⛔ Limite perte atteinte ' + sym + dpnl.toFixed(2);
+    badgeEl.style.color = 'var(--red)';
+  } else {
+    badgeEl.innerHTML = (dpnl >= 0 ? '🟢 +' : '🔴 ') + sym + dpnl.toFixed(2) + ' jour';
+    badgeEl.style.color = dpnl >= 0 ? 'var(--green)' : 'var(--red)';
+  }
+
+  // Barre de progression objectif $5
+  const goalPct = Math.min(100, Math.max(0, (dpnl / 5.0) * 100));
+  document.getElementById('xau-goal-bar').style.width = goalPct + '%';
+  document.getElementById('xau-goal-label').textContent = (dpnl >= 0 ? '+' : '') + sym + dpnl.toFixed(2) + ' / ' + sym + '5.00';
+
+  // Position ouverte XAU
+  const posWrap = document.getElementById('xau-position-wrap');
+  if (xauPos) {
+    posWrap.style.display = 'block';
+    const pnlPos = parseFloat(xauPos.unrealized_pnl || xauPos.pnl || 0);
+    document.getElementById('xau-pos-dir').innerHTML = '<span style="color:' + (xauPos.direction === 'BUY' ? 'var(--green)' : 'var(--red)') + ';">' + xauPos.direction + '</span>';
+    document.getElementById('xau-pos-entry').textContent = (xauPos.avg_price || xauPos.entry_price || 0).toFixed(2);
+    document.getElementById('xau-pos-pnl').innerHTML = '<span style="color:' + (pnlPos >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + (pnlPos >= 0 ? '+' : '') + sym + pnlPos.toFixed(2) + '</span>';
+    document.getElementById('xau-pos-sl').textContent = xauPos.sl ? xauPos.sl.toFixed(2) : '—';
+    document.getElementById('xau-pos-tp').textContent = xauPos.tp ? xauPos.tp.toFixed(2) : '—';
+    document.getElementById('xau-pos-lot').textContent = xauPos.volume || xauPos.lot || '—';
+  } else {
+    posWrap.style.display = 'none';
+  }
+
+  // Derniers signaux XAU depuis scan_results
+  const scan = data.smart_scan || {};
+  const xauCandidate = (scan.candidates || []).find(c => String(c.symbol||'').toUpperCase() === 'XAUUSDM');
+  const sigList = document.getElementById('xau-signals-list');
+  if (xauCandidate) {
+    const dir = xauCandidate.signal_direction || '—';
+    const score = xauCandidate.score || 0;
+    const src = xauCandidate.source || '—';
+    const ts = xauCandidate.scanned_at ? new Date(xauCandidate.scanned_at).toLocaleTimeString('fr-FR') : '—';
+    const regime = xauCandidate.regime || '';
+    const dirColor = dir === 'BUY' ? 'var(--green)' : dir === 'SELL' ? 'var(--red)' : 'var(--muted)';
+    const scorePips = Array.from({length: 5}, (_, i) =>
+      '<span style="display:inline-block;width:8px;height:8px;border-radius:2px;margin:0 1px;background:' + (i < score ? 'var(--amber)' : 'var(--border2)') + ';"></span>'
+    ).join('');
+    sigList.innerHTML =
+      '<span style="color:' + dirColor + ';font-weight:700;">' + dir + '</span>' +
+      ' &nbsp;Score: ' + scorePips +
+      ' &nbsp;<span style="color:var(--accent);">[' + src + ']</span>' +
+      (regime ? ' &nbsp;<span style="color:var(--muted);">' + regime + '</span>' : '') +
+      ' &nbsp;<span style="color:var(--muted2);">' + ts + '</span>';
+  } else if (scan.updated_at) {
+    sigList.textContent = 'Pas de signal XAU actif — dernier scan ' + new Date(scan.updated_at).toLocaleTimeString('fr-FR');
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────
+
 function tick() {
   countdown--;
   autoAiCountdown--;
@@ -2263,7 +2407,7 @@ function tick() {
     document.getElementById('ai-live-auto').textContent = 'ON · ' + Math.max(0, autoAiCountdown) + 's';
   }
   if (countdown <= 0) {
-    countdown = 3;
+    countdown = 5;
     fetchStatus();
   }
   if (autoAiEnabled && autoAiCountdown <= 0 && !aiBusy) {
