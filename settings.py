@@ -1,7 +1,7 @@
 """
 Configuration locale du robot MT5.
-Aucun cloud, aucune API externe: seulement MT5, SQLite, apprentissage local
-et option LLM local sur la machine.
+Aucun cloud, aucune API externe : seulement MT5, SQLite, apprentissage local
+et LLM local (Ollama) — cerveau obligatoire de l'agent IA.
 """
 
 import os
@@ -37,8 +37,8 @@ PREFERRED_SYMBOLS = ["XAUUSDm"]
 MT5_MAX_VISIBLE_SYMBOLS = 1
 DASHBOARD_PORT = int(os.getenv("DASHBOARD_PORT", "8080"))
 
-# === IA LOCALE ===
-# ollama = LLM local via localhost, sans autre moteur
+# === IA LOCALE (Ollama — OBLIGATOIRE) ===
+# Ollama est le cerveau de l'agent : sans lui, aucune position n'est ouverte.
 AI_PROVIDER = os.getenv("AI_PROVIDER", "ollama").strip().lower()
 LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "qwen2.5:3b").strip()
 LOCAL_LLM_ENDPOINT = os.getenv("LOCAL_LLM_ENDPOINT", "http://127.0.0.1:11434/api/generate").strip()
@@ -56,12 +56,11 @@ LLM_MAX_CONTEXT_BARS = int(os.getenv("LLM_MAX_CONTEXT_BARS", "60"))
 ONLY_ALLOW_LOCAL_LLM = True
 
 # === LLM et IA ===
-# Le système doit pouvoir fonctionner sans LLM.
-LLM_ENABLED = os.getenv("LLM_ENABLED", "true").strip().lower() == "true"
-LLM_AS_FINAL_VALIDATOR = os.getenv("LLM_AS_FINAL_VALIDATOR", "false").strip().lower() == "true"
-# True  = utilise les signaux techniques purs si Ollama plante (score >= 4 requis)
-# False = WAIT systématique — comportement original, plus conservateur
-LLM_FALLBACK_TECHNICAL = os.getenv("LLM_FALLBACK_TECHNICAL", "true").strip().lower() == "true"
+# Le LLM est OBLIGATOIRE : sans réponse Ollama, l'agent refuse de trader.
+LLM_ENABLED = True
+LLM_AS_FINAL_VALIDATOR = True
+# Pas de fallback : si Ollama plante, on attend — pas de trade à la sauvette.
+LLM_FALLBACK_TECHNICAL = False
 
 # === FILTRES DE SIGNAL ET CONTEXTE MARCHE ===
 ENABLE_SIGNAL_QUALITY_FILTER = os.getenv("ENABLE_SIGNAL_QUALITY_FILTER", "true").strip().lower() == "true"
