@@ -1,6 +1,6 @@
-﻿# 🤖 Exeness — Bot de trading XAUUSDm spécialisé (MT5 + LLM local optionnel)
+﻿# � Exeness — Agent IA XAUUSDm spécialisé (MT5 + LLM local Ollama)
 
-Exeness est un bot de trading Python **100 % local** composé de 5 agents IA autonomes spécialisés sur **XAUUSDm uniquement**. Il se connecte à MetaTrader 5, inclut un dashboard web, et envoie des notifications Telegram enrichies.
+Exeness est un **système multi-agents IA** Python 100 % local, composé de 5 agents autonomes spécialisés sur **XAUUSDm uniquement**. Chaque décision de trade passe par un **LLM local (Ollama)** qui raisonne sur les signaux techniques avant d'autoriser une position. Sans LLM, aucune position n'est ouverte — c'est intentionnel : ce n'est pas un bot à règles, c'est un agent IA.
 
 ---
 
@@ -42,18 +42,22 @@ Cochez **"Add Python to PATH"** lors de l'installation.
 - Un compte broker connecté dans MT5 (démo ou réel).
 - Vous pouvez télécharger MT5 depuis votre broker (ex. Exness, ICMarkets…) ou depuis [metatrader5.com](https://www.metatrader5.com).
 
-### 🦙 Ollama (optionnel)
+### 🦙 Ollama — **OBLIGATOIRE**
 
-Exeness peut utiliser un LLM local pour enrichir les analyses de marché.
+Ollama est le **cerveau de l'agent IA**. Le `DecisionAgent` interroge le LLM local avant chaque trade. Sans Ollama actif, **aucune position n'est ouverte**.
 
 - Téléchargement : [https://ollama.ai](https://ollama.ai)
 - Modèle recommandé (léger) : `qwen2.5:3b`
 
 ```bash
+# Installer le modèle
 ollama pull qwen2.5:3b
+
+# Vérifier qu'Ollama tourne
+curl http://127.0.0.1:11434/api/tags
 ```
 
-> Sans Ollama, le bot fonctionne en mode **analyse technique pure** (signaux calculés localement). C'est le mode par défaut.
+> ⚠️ **Ollama doit être démarré avant `launch.py`.** Si le service est arrêté en cours de route, l'agent IA refuse d'ouvrir de nouvelles positions jusqu'au retour du LLM.
 
 ---
 
@@ -192,7 +196,7 @@ Notifications envoyées automatiquement :
 
 > Le bouton **🔍 Détails** dans chaque alerte de trade envoie les indicateurs techniques complets (RSI, MACD, ADX, Bollinger, supports/résistances…).
 
-### 🦙 LLM Ollama (optionnel)
+### 🦙 LLM Ollama — **Cerveau de l'agent**
 
 Dans la section LLM du dashboard :
 
@@ -201,6 +205,8 @@ Dans la section LLM du dashboard :
 | `local_llm_endpoint` | URL de l'API Ollama | `http://127.0.0.1:11434/api/generate` |
 | `local_llm_model` | Modèle Ollama à utiliser | `qwen2.5:3b` |
 | `local_llm_timeout` | Timeout en secondes | `300` |
+
+> Le LLM est consulté pour **chaque décision de trade**. Il reçoit : direction, score, spread, régime de marché, session, ratio SL/TP — et répond OUI/NON avec justification. Son raisonnement est logué dans le dashboard.
 
 ---
 

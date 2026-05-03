@@ -1,12 +1,19 @@
 """
-Agent Décideur — Spécialisé XAUUSDm uniquement.
-Reçoit signaux + évaluations risques et prend la décision finale d'exécution.
+Agent Décideur IA — Spécialisé XAUUSDm uniquement.
+Reçoit signaux + évaluations risques, interroge le LLM local (Ollama) pour
+une décision raisonnée, puis envoie l'ordre à ExecutionAgent.
+Le LLM est obligatoire : sans réponse Ollama, aucune position n'est ouverte.
 """
 
 import asyncio
+import json
+import re
+import urllib.request
+import urllib.error
 from datetime import datetime, timezone
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from agent_framework import Agent
+import settings as cfg
 
 
 class DecisionAgent(Agent):
@@ -129,7 +136,13 @@ class DecisionAgent(Agent):
             self.log("INFO", f"{instrument}: Cooldown actif, décision retardée")
             return
         
-        # Décision finale
+        # === VALIDATION PAR LE LLM (obligatoire) ===
+        llm_result = await self._ask_llm(instrument, direction, confidence, signal_data, risk_data)
+        if not llm_result["approved"]:
+            self.log("INFO", f"{instrument}: LLM refuse — {llm_result['reason']}")
+            return
+
+        # Décision finale validée par l'IA
         decision = {
             "instrument": instrument,
             "direction": direction,
@@ -140,6 +153,7 @@ class DecisionAgent(Agent):
             "signal_details": signal_data.get("details", {}) or {},
             "market_context": signal_data.get("market_context", {}),
             "risk_score": risk_score,
+            "llm_reasoning": llm_result.get("reasoning", ""),
         }
         
         # Envoyer à ExecutionAgent pour exécution
@@ -150,5 +164,98 @@ class DecisionAgent(Agent):
         )
         
         self.log("INFO", f"✅ XAUUSDm: DÉCISION {direction} | conf {decision['confidence']:.1%} | SL={decision['sl_pips']}p TP={decision['tp_pips']}p | #{self.decisions_made + 1}")
+        self.log("INFO", f"🧠 LLM reasoning: {llm_result.get('reasoning', '')[:120]}")
         self.decisions_made += 1
         self.last_decision_at[instrument] = now
+
+    async def _ask_llm(
+        self,
+        instrument: str,
+        direction: str,
+        confidence: float,
+        signal_data: Dict[str, Any],
+        risk_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Interroge Ollama pour valider ou rejeter la décision de trade.
+        
+        Retourne {"approved": bool, "reason": str, "reasoning": str}.
+        Si Ollama est injoignable, retourne approved=False.
+        """
+        score = signal_data.get("score", 0)
+        spread = signal_data.get("spread", 0)
+        regime = signal_data.get("market_context", {}).get("regime", "?") if isinstance(signal_data.get("market_context"), dict) else "?"
+        session = signal_data.get("session", "?")
+        if isinstance(session, dict):
+            session = session.get("label", "?")
+        sl_pips = risk_data.get("sl_pips", 30)
+        tp_pips = risk_data.get("tp_pips", 60)
+        risk_score = risk_data.get("risk_score", 0)
+        details = signal_data.get("details", {}) or {}
+
+        prompt = (
+            f"Tu es un agent IA spécialisé sur XAUUSDm (or/USD). "
+            f"Décide si ce signal de trading doit être exécuté.\n\n"
+            f"SIGNAL:\n"
+            f"- Direction: {direction}\n"
+            f"- Score technique: {score}/5\n"
+            f"- Confiance calculée: {confidence:.0%}\n"
+            f"- Spread actuel: {spread:.1f} pips\n"
+            f"- Régime marché: {regime}\n"
+            f"- Session: {session}\n"
+            f"- SL: {sl_pips} pips | TP: {tp_pips} pips (ratio 1:{tp_pips/sl_pips:.1f})\n"
+            f"- Score risque: {risk_score}/5\n"
+            f"- Détails indicateurs: {json.dumps(details, ensure_ascii=False)[:300]}\n\n"
+            f"RÈGLES:\n"
+            f"- Capital $100, objectif +$5/jour, stop -$10/jour\n"
+            f"- Spread gold max acceptable: 6 pips\n"
+            f"- Ne trader que si le signal est clair et le contexte favorable\n"
+            f"- En cas de doute, répondre NON\n\n"
+            f"Réponds UNIQUEMENT avec ce format JSON (sans markdown):\n"
+            f'{{\"decision\": \"OUI\" ou \"NON\", \"raison\": \"explication courte\"}}'
+        )
+
+        payload = json.dumps({
+            "model": cfg.LOCAL_LLM_MODEL,
+            "prompt": prompt,
+            "stream": False,
+            "temperature": cfg.LLM_TEMPERATURE,
+            "options": {"num_predict": 120},
+        }).encode("utf-8")
+
+        endpoint = cfg.LOCAL_LLM_ENDPOINT
+        try:
+            req = urllib.request.Request(
+                endpoint,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=cfg.LOCAL_LLM_TIMEOUT) as resp:
+                raw = resp.read().decode("utf-8")
+            response_data = json.loads(raw)
+            text = response_data.get("response", "").strip()
+        except (urllib.error.URLError, OSError) as exc:
+            self.log("ERROR", f"LLM injoignable ({endpoint}): {exc} — trade annulé")
+            return {"approved": False, "reason": f"Ollama injoignable: {exc}", "reasoning": ""}
+        except Exception as exc:
+            self.log("ERROR", f"LLM erreur inattendue: {exc} — trade annulé")
+            return {"approved": False, "reason": str(exc), "reasoning": ""}
+
+        # Parser la réponse JSON du LLM
+        try:
+            # Extraire le JSON même si le LLM ajoute du texte autour
+            match = re.search(r'\{[^{}]+\}', text, re.DOTALL)
+            if match:
+                parsed = json.loads(match.group())
+            else:
+                parsed = json.loads(text)
+            decision_str = str(parsed.get("decision", "NON")).strip().upper()
+            raison = str(parsed.get("raison", text[:120]))
+            approved = decision_str in ("OUI", "YES", "TRUE", "1")
+            return {"approved": approved, "reason": raison, "reasoning": text[:300]}
+        except (json.JSONDecodeError, KeyError):
+            # Fallback: cherche OUI/NON dans le texte brut
+            upper_text = text.upper()
+            if "OUI" in upper_text or '"YES"' in upper_text:
+                return {"approved": True, "reason": "LLM approuve (parsing souple)", "reasoning": text[:300]}
+            return {"approved": False, "reason": f"LLM répond NON ou illisible: {text[:80]}", "reasoning": text[:300]}
